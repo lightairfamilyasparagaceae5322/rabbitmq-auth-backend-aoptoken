@@ -1,7 +1,7 @@
 # rabbitmq-auth-backend-aoptoken
 
 A RabbitMQ authentication backend that lets clients authenticate with a
-**pre-issued HS256 JWT token** (an opaque `token:<jwt>` string placed in the
+**pre-issued JWT token** (an opaque `token:<jwt>` string placed in the
 AMQP password field), **side by side** with normal username/password users —
 on the **same account**, with **no client changes**.
 
@@ -35,35 +35,53 @@ a mode:
 
 ## Configuration
 
-The signing key is configurable via `advanced.config`, in this order of
-precedence:
+Everything is set under the `rabbitmq_auth_backend_aoptoken` application in
+`advanced.config`. Configure a symmetric secret, a public key, or both — the
+plugin picks one based on the algorithm declared by each token.
 
 ```erlang
 [
   {rabbitmq_auth_backend_aoptoken, [
-     %% pick ONE:
-     {key_file,   "/etc/rabbitmq/token.key"}   %% raw key bytes read from a file
-     %% {key_base64, "Jw..."}                   %% inline, base64-encoded
-     %% {key,        <<"...">>}                 %% inline raw bytes
+     %% symmetric secret for HS256/HS384/HS512 — one of:
+     {key_file,          "/etc/rabbitmq/token.key"},
+     %% {key_base64,     "Jw..."},
+     %% {key,            <<"...">>},
+
+     %% public key for RS*/ES* (PEM, or DER SubjectPublicKeyInfo) — one of:
+     %% {public_key_file,   "/etc/rabbitmq/token-public.pem"},
+     %% {public_key_base64, "LS0t..."},
+     %% {public_key,        <<"-----BEGIN PUBLIC KEY-----...">>},
+
+     %% optional
+     %% {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
+     %% {leeway_seconds, 0}                  %% clock skew allowance for exp/nbf
   ]}
 ].
 ```
 
-The key is read once and cached; changing the config value reloads it. If no
-key is configured, token logins are refused (password logins are unaffected).
-The key never ships with the plugin.
+Keys are read once and cached; changing a config value reloads them. If no
+usable key is configured, token logins are refused and a warning is logged —
+password authentication is unaffected. Keys never ship with the plugin.
 
 ## Token format
 
-Standard JWT signed with a symmetric key (the HS family), payload contains at
-least `{"sub":"<username>"}`. The client sends it in the password field prefixed
-with `token:`, e.g. `token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<sig>`.
+A standard JWT whose payload carries at least `{"sub":"<username>"}`. The
+client sends it in the password field prefixed with `token:`, e.g.
+`token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<signature>`.
 
-The signing algorithm is read from the JWT header. **HS256, HS384 and HS512**
-are supported (the symmetric mode used by Pulsar's `tokenSecretKey`). Asymmetric
-algorithms (RS*/ES*, i.e. Pulsar's `tokenPublicKey` mode) and `alg: none` are
-rejected. This matches Apache Pulsar's built-in token authentication, which is
-JWT-based and unchanged in shape across Pulsar 2.x–4.x.
+The signing algorithm is read from the JWT header:
+
+| header `alg` | verified with |
+|---|---|
+| `HS256` / `HS384` / `HS512` | the symmetric secret (Pulsar's `tokenSecretKey` mode) |
+| `RS256` / `RS384` / `RS512` | the RSA public key |
+| `ES256` / `ES384` / `ES512` | the EC public key (Pulsar's `tokenPublicKey` mode) |
+| `none`, anything else | rejected |
+
+Claims are validated after the signature: `exp` and `nbf` are enforced when
+present (with optional `leeway_seconds`), and `aud` is checked when `audience`
+is configured. This matches Apache Pulsar's built-in token authentication,
+which is JWT-based and unchanged in shape across Pulsar 2.x–4.x.
 
 ## Compatibility
 
@@ -132,6 +150,19 @@ erlc -I <rmq>/plugins/rabbit_common-3.12.14/include \
      -o ebin src/rabbit_auth_backend_aoptoken.erl
 ```
 
+## Tests
+
+EUnit covers every supported algorithm, the claim checks and the rejection
+paths (tampering, `alg: none`, algorithm confusion, expiry, audience,
+missing configuration). Tokens are minted inside the suite, so the real
+signature paths are exercised.
+
+```sh
+./run-tests.sh --rmq-release 3.13.7     # or: ./run-tests.sh <rabbit_common dir>
+```
+
+CI runs the suite against RabbitMQ 3.11, 3.12, 3.13, 4.0 and 4.1.
+
 ## Install
 
 1. Build/package the plugin as `.ez` for your broker version and drop it into
@@ -142,11 +173,15 @@ erlc -I <rmq>/plugins/rabbit_common-3.12.14/include \
 
 ## Security notes
 
-- Uses constant-time comparison for the signature.
-- The signing key never leaves the server; it is not embedded in the plugin.
-- Tokens without an `exp` claim do not expire — rotate keys/tokens per your
-  policy. Signature verification means captured tokens are honored only while
-  the key is unchanged.
+- The algorithm is taken from the token header and must be one of the
+  supported families; `none` is always rejected.
+- Symmetric and asymmetric keys are configured separately, so a public key can
+  never be used as an HMAC secret (the classic JWT algorithm-confusion attack).
+- HMAC comparison is constant-time.
+- `exp` / `nbf` are enforced when present. Tokens without `exp` do not expire —
+  rotate keys or tokens according to your own policy.
+- The signing key is read from configuration at runtime and is never embedded
+  in the plugin.
 
 ## License
 

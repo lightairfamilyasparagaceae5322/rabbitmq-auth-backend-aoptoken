@@ -1,155 +1,344 @@
-%% RabbitMQ authentication backend for pre-issued HS256 JWT tokens.
+%% RabbitMQ authentication backend for pre-issued JWT bearer tokens.
 %%
-%% Accepts clients that send an opaque bearer token in the AMQP password
-%% field, prefixed with "token:" and carrying a minimal JWT whose payload is
-%% {"sub": "<username>"} (the credential style used by Pulsar/AoP-based
-%% brokers). It lets such clients keep working unchanged after migrating to
-%% native RabbitMQ, side by side with normal username/password users.
+%% Accepts clients that send a token in the AMQP password field, prefixed with
+%% "token:" and carrying a JWT whose payload has a "sub" claim — the credential
+%% style used by Apache Pulsar and AoP-based brokers. Such clients keep working
+%% unchanged after migrating to native RabbitMQ, side by side with ordinary
+%% username/password users on the same account.
 %%
-%% - authn only; delegate authz to rabbit_auth_backend_internal in the chain
-%% - signing key is configurable: {rabbitmq_auth_backend_aoptoken, key_file}
-%% - identity is taken from the token's "sub" claim
+%% Authentication only: put it in a chain and delegate authorization to the
+%% internal backend, so permissions keep coming from RabbitMQ's own database.
 %%
-%% Config example (advanced.config):
-%%   {rabbitmq_auth_backend_aoptoken, [{key_file, "/etc/rabbitmq/token.key"}]}
-%% Chain (rabbitmq.conf):
 %%   auth_backends.1 = internal
 %%   auth_backends.2.authn = rabbit_auth_backend_aoptoken
 %%   auth_backends.2.authz = internal
+%%
+%% The signing algorithm is taken from the JWT header:
+%%
+%%   HS256 / HS384 / HS512   symmetric, verified with a shared secret
+%%                           (Pulsar's tokenSecretKey mode)
+%%   RS256 / RS384 / RS512   RSA, verified with a public key
+%%   ES256 / ES384 / ES512   ECDSA, verified with a public key
+%%                           (Pulsar's tokenPublicKey mode)
+%%
+%% "none" and any other algorithm are rejected.
+%%
+%% Configuration (advanced.config), all optional except one key source:
+%%
+%%   {rabbitmq_auth_backend_aoptoken, [
+%%      %% symmetric secret — one of:
+%%      {key_file,          "/etc/rabbitmq/token.key"},
+%%      {key_base64,        "..."},
+%%      {key,               <<"...">>},
+%%
+%%      %% public key for RS*/ES* (PEM or DER SubjectPublicKeyInfo) — one of:
+%%      {public_key_file,   "/etc/rabbitmq/token-public.pem"},
+%%      {public_key_base64, "..."},
+%%      {public_key,        <<"...">>},
+%%
+%%      {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
+%%      {leeway_seconds, 0}                  %% clock skew allowance for exp/nbf
+%%   ]}
 -module(rabbit_auth_backend_aoptoken).
+
 -include_lib("rabbit_common/include/rabbit.hrl").
+
 -behaviour(rabbit_authn_backend).
+
 -export([user_login_authentication/2]).
 
+-define(APP, rabbitmq_auth_backend_aoptoken).
+
+%%----------------------------------------------------------------------------
+%% Authentication
+%%----------------------------------------------------------------------------
+
 user_login_authentication(_Username, AuthProps) ->
-    case get_password(AuthProps) of
-        {ok, Pwd} ->
-            case strip_token(Pwd) of
-                {ok, Jwt} ->
-                    case verify_safe(Jwt) of
-                        {ok, Sub} ->
-                            %% identity is the token subject
-                            {ok, #auth_user{username = Sub, tags = [], impl = none}};
-                        error ->
-                            {refused, "invalid token signature", []}
-                    end;
-                notoken ->
-                    %% not a token; let the next backend (e.g. internal) try
-                    {refused, "not an AoP token", []}
+    case password(AuthProps) of
+        {ok, <<"token:", Jwt/binary>>} ->
+            case check_token(Jwt) of
+                {ok, Subject} ->
+                    %% The token's subject is the identity; the authorization
+                    %% backend resolves its permissions.
+                    {ok, #auth_user{username = Subject, tags = [], impl = none}};
+                {refused, Reason} ->
+                    {refused, Reason, []};
+                {misconfigured, Reason} ->
+                    rabbit_log:warning(
+                      "~ts: cannot verify tokens: ~tp", [?APP, Reason]),
+                    {refused, "token authentication is not configured", []}
             end;
+        {ok, _NotAToken} ->
+            %% Leave it to the next backend in the chain (typically internal).
+            {refused, "not a bearer token", []};
         error ->
-            {refused, "no password provided", []}
+            {refused, "no credentials provided", []}
     end.
 
-get_password(P) when is_map(P) ->
-    case maps:find(password, P) of {ok,V} -> {ok, to_bin(V)}; error -> error end;
-get_password(P) when is_list(P) ->
-    case lists:keyfind(password, 1, P) of {password,V} -> {ok, to_bin(V)}; false -> error end;
-get_password(_) -> error.
+password(Props) when is_map(Props) ->
+    case maps:find(password, Props) of
+        {ok, V} -> {ok, to_binary(V)};
+        error   -> error
+    end;
+password(Props) when is_list(Props) ->
+    case lists:keyfind(password, 1, Props) of
+        {password, V} -> {ok, to_binary(V)};
+        false         -> error
+    end;
+password(_) ->
+    error.
 
-to_bin(B) when is_binary(B) -> B;
-to_bin(L) when is_list(L) -> list_to_binary(L);
-to_bin(_) -> <<>>.
+to_binary(B) when is_binary(B) -> B;
+to_binary(L) when is_list(L)   -> iolist_to_binary(L);
+to_binary(_)                   -> <<>>.
 
-strip_token(<<"token:", Rest/binary>>) -> {ok, Rest};
-strip_token(_) -> notoken.
+%%----------------------------------------------------------------------------
+%% Token verification
+%%----------------------------------------------------------------------------
 
-%% Signing key resolution, in order of precedence, all via app config:
-%%   {key, <<"...">>}          inline raw key bytes
-%%   {key_base64, "..."}       inline key, base64-encoded
-%%   {key_file, "/path"}       key read from a file (raw bytes)
-%% Result is cached in persistent_term, keyed by the config value, so a
-%% config change is picked up automatically and the file is not re-read
-%% on every authentication.
-key() ->
-    App = rabbitmq_auth_backend_aoptoken,
-    Cfg = case application:get_env(App, key) of
-              {ok, K} when is_binary(K)  -> {inline, K};
-              _ ->
-                  case application:get_env(App, key_base64) of
-                      {ok, B64}          -> {b64, iolist_to_binary(B64)};
-                      _ ->
-                          case application:get_env(App, key_file) of
-                              {ok, F}    -> {file, iolist_to_binary(F)};
-                              _          -> undefined
-                          end
-                  end
-          end,
-    resolve(Cfg).
+%% {ok, Subject} | {refused, Reason} | {misconfigured, Reason}
+check_token(Jwt) ->
+    try
+        case binary:split(Jwt, <<".">>, [global]) of
+            [HeaderSeg, PayloadSeg, SigSeg] ->
+                Header = decode_json(HeaderSeg),
+                Payload = decode_json(PayloadSeg),
+                Signed = <<HeaderSeg/binary, ".", PayloadSeg/binary>>,
+                Signature = base64url_decode(SigSeg),
+                case verify_signature(Header, Signed, Signature) of
+                    true  -> check_claims(Payload);
+                    false -> {refused, "invalid token signature"};
+                    {unsupported, Alg} ->
+                        {refused, "unsupported token algorithm " ++
+                             binary_to_list(Alg)}
+                end;
+            _ ->
+                {refused, "malformed token"}
+        end
+    catch
+        throw:{?APP, misconfigured, Reason} -> {misconfigured, Reason};
+        _:_ -> {refused, "malformed token"}
+    end.
 
-resolve(undefined) ->
-    error({rabbitmq_auth_backend_aoptoken, no_signing_key_configured});
-resolve(Cfg) ->
-    PtKey = {?MODULE, signing_key},
-    case persistent_term:get(PtKey, undefined) of
-        {Cfg, Bytes} -> Bytes;                 %% cached and config unchanged
+verify_signature(Header, Signed, Signature) ->
+    case algorithm(Header) of
+        {hmac, Digest} ->
+            Expected = crypto:mac(hmac, Digest, symmetric_key(), Signed),
+            constant_time_equal(Expected, Signature);
+        {rsa, Digest} ->
+            crypto:verify(rsa, Digest, Signed, Signature, rsa_public_key(),
+                          [{rsa_padding, rsa_pkcs1_padding}]);
+        {ecdsa, Digest} ->
+            {Point, Curve} = ec_public_key(),
+            crypto:verify(ecdsa, Digest, Signed, ecdsa_der_signature(Signature),
+                          [Point, Curve]);
+        {unsupported, Alg} ->
+            {unsupported, Alg}
+    end.
+
+algorithm(Header) ->
+    case maps:get(<<"alg">>, Header, undefined) of
+        <<"HS256">> -> {hmac,  sha256};
+        <<"HS384">> -> {hmac,  sha384};
+        <<"HS512">> -> {hmac,  sha512};
+        <<"RS256">> -> {rsa,   sha256};
+        <<"RS384">> -> {rsa,   sha384};
+        <<"RS512">> -> {rsa,   sha512};
+        <<"ES256">> -> {ecdsa, sha256};
+        <<"ES384">> -> {ecdsa, sha384};
+        <<"ES512">> -> {ecdsa, sha512};
+        Alg when is_binary(Alg) -> {unsupported, Alg};
+        _ -> {unsupported, <<"(absent)">>}
+    end.
+
+%% Signature is valid at this point; validate the claims that bound its use.
+check_claims(Payload) ->
+    Now = os:system_time(second),
+    Leeway = config(leeway_seconds, 0),
+    case expired(Payload, Now, Leeway) of
+        true  -> {refused, "token has expired"};
+        false ->
+            case not_yet_valid(Payload, Now, Leeway) of
+                true  -> {refused, "token is not valid yet"};
+                false ->
+                    case audience_accepted(Payload) of
+                        false -> {refused, "token audience mismatch"};
+                        true  -> subject(Payload)
+                    end
+            end
+    end.
+
+expired(Payload, Now, Leeway) ->
+    case maps:get(<<"exp">>, Payload, undefined) of
+        Exp when is_number(Exp) -> Now > Exp + Leeway;
+        _ -> false
+    end.
+
+not_yet_valid(Payload, Now, Leeway) ->
+    case maps:get(<<"nbf">>, Payload, undefined) of
+        Nbf when is_number(Nbf) -> Now + Leeway < Nbf;
+        _ -> false
+    end.
+
+audience_accepted(Payload) ->
+    case config(audience, undefined) of
+        undefined -> true;
+        Expected0 ->
+            Expected = to_binary(Expected0),
+            case maps:get(<<"aud">>, Payload, undefined) of
+                Expected             -> true;
+                L when is_list(L)    -> lists:member(Expected, L);
+                _                    -> false
+            end
+    end.
+
+subject(Payload) ->
+    case maps:get(<<"sub">>, Payload, undefined) of
+        Sub when is_binary(Sub), Sub =/= <<>> -> {ok, Sub};
+        _ -> {refused, "token has no subject"}
+    end.
+
+decode_json(Segment) ->
+    case rabbit_json:try_decode(base64url_decode(Segment)) of
+        {ok, Map} when is_map(Map) -> Map;
+        _ -> throw(malformed)
+    end.
+
+%%----------------------------------------------------------------------------
+%% Keys
+%%----------------------------------------------------------------------------
+
+%% Shared secret for HS*: key | key_base64 | key_file.
+symmetric_key() ->
+    resolve(symmetric_key,
+            [{key, inline}, {key_base64, base64}, {key_file, file}],
+            fun load_bytes/1,
+            no_symmetric_key_configured).
+
+%% Public key for RS*/ES*: public_key | public_key_base64 | public_key_file.
+public_key() ->
+    resolve(public_key,
+            [{public_key, inline}, {public_key_base64, base64},
+             {public_key_file, file}],
+            fun(Source) -> decode_public_key(load_bytes(Source)) end,
+            no_public_key_configured).
+
+rsa_public_key() ->
+    case public_key() of
+        {'RSAPublicKey', Modulus, Exponent} -> [Exponent, Modulus];
+        _ -> misconfigured(configured_public_key_is_not_rsa)
+    end.
+
+ec_public_key() ->
+    case public_key() of
+        {{'ECPoint', Point}, {namedCurve, Oid}} -> {Point, named_curve(Oid)};
+        _ -> misconfigured(configured_public_key_is_not_ec)
+    end.
+
+named_curve({1, 2, 840, 10045, 3, 1, 7}) -> secp256r1;
+named_curve({1, 3, 132, 0, 34})          -> secp384r1;
+named_curve({1, 3, 132, 0, 35})          -> secp521r1;
+named_curve(Oid)                         -> misconfigured({unsupported_curve, Oid}).
+
+%% Resolve a key from the first configured source, caching the result in
+%% persistent_term keyed by the source, so files are not re-read on every
+%% authentication and a configuration change is picked up automatically.
+resolve(CacheName, Sources, Load, MissingReason) ->
+    Source = case first_configured(Sources) of
+                 undefined -> misconfigured(MissingReason);
+                 Found     -> Found
+             end,
+    CacheKey = {?MODULE, CacheName},
+    case persistent_term:get(CacheKey, undefined) of
+        {Source, Value} ->
+            Value;
         _ ->
-            Bytes = load_key(Cfg),
-            persistent_term:put(PtKey, {Cfg, Bytes}),
-            Bytes
+            Value = Load(Source),
+            persistent_term:put(CacheKey, {Source, Value}),
+            Value
     end.
 
-load_key({inline, K}) -> K;
-load_key({b64, B64})  -> base64:decode(B64);
-load_key({file, F})   ->
-    case file:read_file(F) of
-        {ok, Bin} -> Bin;
-        {error, R} -> error({rabbitmq_auth_backend_aoptoken, {cannot_read_key_file, F, R}})
+first_configured([]) ->
+    undefined;
+first_configured([{Name, Kind} | Rest]) ->
+    case application:get_env(?APP, Name) of
+        {ok, Value} -> {Kind, to_binary(Value)};
+        _           -> first_configured(Rest)
     end.
 
-verify_safe(Jwt) ->
-    try verify(Jwt, key())
-    catch _:_ -> error
+load_bytes({inline, Bytes}) -> Bytes;
+load_bytes({base64, Value}) -> base64:decode(Value);
+load_bytes({file, Path}) ->
+    case file:read_file(Path) of
+        {ok, Bytes}     -> Bytes;
+        {error, Reason} -> misconfigured({cannot_read_key_file, Path, Reason})
     end.
 
-verify(Jwt, Key) ->
-    case binary:split(Jwt, <<".">>, [global]) of
-        [H, P, S] ->
-            case hash_alg(H) of
-                {ok, Hash} ->
-                    Signing = <<H/binary, ".", P/binary>>,
-                    Expected = b64url(crypto:mac(hmac, Hash, Key, Signing)),
-                    case consttime_eq(Expected, S) of
-                        true  -> sub_of(P);
-                        false -> error
-                    end;
-                error -> error   %% unsupported/absent alg (e.g. none, RS*, ES*)
-            end;
-        _ -> error
+%% Accepts a PEM public key or a DER-encoded SubjectPublicKeyInfo.
+decode_public_key(Bytes) ->
+    try
+        case binary:match(Bytes, <<"-----BEGIN">>) of
+            nomatch ->
+                public_key:der_decode('SubjectPublicKeyInfo', Bytes);
+            _ ->
+                [Entry | _] = public_key:pem_decode(Bytes),
+                public_key:pem_entry_decode(Entry)
+        end
+    catch
+        _:_ -> misconfigured(cannot_decode_public_key)
     end.
 
-%% Map the JWT header "alg" to an HMAC hash. Only the HS family (symmetric,
-%% Pulsar tokenSecretKey mode) is supported; asymmetric algs (RS*/ES*) use a
-%% public key and are out of scope, and "none" is always rejected.
-hash_alg(HeaderSeg) ->
-    Json = b64url_decode(HeaderSeg),
-    case re:run(Json, "\"alg\"\s*:\s*\"([^\"]+)\"", [{capture,[1],binary}]) of
-        {match, [<<"HS256">>]} -> {ok, sha256};
-        {match, [<<"HS384">>]} -> {ok, sha384};
-        {match, [<<"HS512">>]} -> {ok, sha512};
-        _ -> error
-    end.
+misconfigured(Reason) ->
+    throw({?APP, misconfigured, Reason}).
 
-sub_of(PayloadSeg) ->
-    Json = b64url_decode(PayloadSeg),
-    case re:run(Json, "\"sub\"\\s*:\\s*\"([^\"]+)\"", [{capture,[1],binary}]) of
-        {match, [Sub]} -> {ok, Sub};
-        _ -> error
-    end.
+config(Name, Default) ->
+    application:get_env(?APP, Name, Default).
 
-%% base64url encode (no padding)
-b64url(Bin) ->
-    B = base64:encode(Bin),
-    NoPad = binary:replace(B, <<"=">>, <<>>, [global]),
-    binary:replace(binary:replace(NoPad, <<"+">>, <<"-">>, [global]), <<"/">>, <<"_">>, [global]).
+%%----------------------------------------------------------------------------
+%% Encoding helpers
+%%----------------------------------------------------------------------------
 
-b64url_decode(Bin) ->
-    B0 = binary:replace(binary:replace(Bin, <<"-">>, <<"+">>, [global]), <<"_">>, <<"/">>, [global]),
-    Pad = case byte_size(B0) rem 4 of 0 -> <<>>; N -> binary:copy(<<"=">>, 4 - N) end,
-    base64:decode(<<B0/binary, Pad/binary>>).
+base64url_decode(Bin) ->
+    Padded = case byte_size(Bin) rem 4 of
+                 0 -> Bin;
+                 N -> <<Bin/binary, (binary:copy(<<"=">>, 4 - N))/binary>>
+             end,
+    base64:decode(binary:replace(
+                    binary:replace(Padded, <<"-">>, <<"+">>, [global]),
+                    <<"_">>, <<"/">>, [global])).
 
-consttime_eq(A, B) when byte_size(A) =/= byte_size(B) -> false;
-consttime_eq(A, B) -> consttime_eq(A, B, 0).
-consttime_eq(<<>>, <<>>, Acc) -> Acc =:= 0;
-consttime_eq(<<X,Ra/binary>>, <<Y,Rb/binary>>, Acc) ->
-    consttime_eq(Ra, Rb, Acc bor (X bxor Y)).
+%% JWS carries an ECDSA signature as the raw R||S pair; crypto:verify expects
+%% a DER SEQUENCE of two INTEGERs.
+ecdsa_der_signature(Signature) ->
+    Half = byte_size(Signature) div 2,
+    <<R:Half/binary, S:Half/binary>> = Signature,
+    Body = <<(der_integer(R))/binary, (der_integer(S))/binary>>,
+    <<16#30, (der_length(byte_size(Body)))/binary, Body/binary>>.
+
+der_integer(Bin) ->
+    Value = case strip_leading_zeros(Bin) of
+                %% DER integers are signed: a leading bit of 1 needs a 0 byte.
+                <<First, _/binary>> = V when First >= 16#80 -> <<0, V/binary>>;
+                <<>> -> <<0>>;
+                V -> V
+            end,
+    <<16#02, (der_length(byte_size(Value)))/binary, Value/binary>>.
+
+strip_leading_zeros(<<0, Rest/binary>>) when byte_size(Rest) > 0 ->
+    strip_leading_zeros(Rest);
+strip_leading_zeros(Bin) ->
+    Bin.
+
+der_length(Length) when Length < 16#80  -> <<Length>>;
+der_length(Length) when Length < 16#100 -> <<16#81, Length>>;
+der_length(Length)                      -> <<16#82, Length:16>>.
+
+constant_time_equal(A, B) when byte_size(A) =/= byte_size(B) ->
+    false;
+constant_time_equal(A, B) ->
+    constant_time_equal(A, B, 0).
+
+constant_time_equal(<<>>, <<>>, Acc) ->
+    Acc =:= 0;
+constant_time_equal(<<X, A/binary>>, <<Y, B/binary>>, Acc) ->
+    constant_time_equal(A, B, Acc bor (X bxor Y)).
