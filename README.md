@@ -74,11 +74,14 @@ forward-compatible: code compiled on OTP *N* loads on OTP *N*, *N+1* and *N+2*
 (a newer runtime loads older BEAM, not the reverse). Each release therefore
 ships one `.ez` per OTP line — pick the one at or below your broker's OTP:
 
-| your broker's OTP | use the asset | also covers |
-|---|---|---|
-| 25 | `…-otp25.ez` | RabbitMQ 3.12 |
-| 26 | `…-otp26.ez` | RabbitMQ 3.12 / 3.13 / 4.0 |
-| 27 | `…-otp27.ez` | RabbitMQ 4.0 |
+| your broker's OTP | use the asset |
+|---|---|
+| 25 or 26 | `…-otp25.ez` (loads on OTP 25/26/27) |
+| 27, 28 or 29 | `…-otp27.ez` (loads on OTP 27/28/29) |
+
+Two artifacts cover OTP 25–29, i.e. RabbitMQ 3.11 through the latest 4.x. A
+newer runtime loads an older-built artifact, so you never need a build for
+every OTP.
 
 Check your broker's OTP with `rabbitmqctl status | grep -i erlang`. If none
 matches, build from source against your version (below).
@@ -89,7 +92,7 @@ A ready-to-use `.ez` is attached to each [GitHub release](https://github.com/mar
 
 ```sh
 # 1. drop the plugin into the broker's plugins directory
-cp rabbitmq_auth_backend_aoptoken-0.1.0-otp26.ez "$RABBITMQ_HOME/plugins/"
+cp rabbitmq_auth_backend_aoptoken-0.1.0-otp25.ez "$RABBITMQ_HOME/plugins/"   # or -otp27, per the table above
 
 # 2. enable it
 rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken
