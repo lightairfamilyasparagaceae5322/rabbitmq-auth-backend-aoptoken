@@ -28,13 +28,13 @@ user_login_authentication(_Username, AuthProps) ->
                 {ok, Jwt} ->
                     case verify_safe(Jwt) of
                         {ok, Sub} ->
-                            %% 身份取 token 的 sub（AoP 语义）
+                            %% identity is the token subject
                             {ok, #auth_user{username = Sub, tags = [], impl = none}};
                         error ->
-                            {refused, "AoP token 签名校验失败", []}
+                            {refused, "invalid token signature", []}
                     end;
                 notoken ->
-                    %% 不是 token，交给链上其它后端（如 internal 账号密码）
+                    %% not a token; let the next backend (e.g. internal) try
                     {refused, "not an AoP token", []}
             end;
         error ->
@@ -121,7 +121,7 @@ sub_of(PayloadSeg) ->
         _ -> error
     end.
 
-%% base64url 编码（无填充）
+%% base64url encode (no padding)
 b64url(Bin) ->
     B = base64:encode(Bin),
     NoPad = binary:replace(B, <<"=">>, <<>>, [global]),

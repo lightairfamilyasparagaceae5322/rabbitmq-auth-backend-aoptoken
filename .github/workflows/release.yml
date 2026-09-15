@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        otp: ['25', '26', '27']   # 各 OTP 编一个 .ez；BEAM 可在 编译版本~+2 的运行时加载
+        otp: ['25', '26', '27']   # one .ez per OTP; BEAM loads on the build OTP and up to +2
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
