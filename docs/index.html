@@ -263,6 +263,18 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
   ]}
 ].</pre>
 
+    <h3 style="font-size:16px;margin:30px 0 4px">Settings and defaults</h3>
+    <div class="tw"><table>
+      <thead><tr><th>setting</th><th>default</th><th>when not configured</th></tr></thead>
+      <tbody>
+        <tr><td><code>key</code> / <code>key_base64</code> / <code>key_file</code></td><td>none</td><td><code>HS*</code> tokens refused, warning logged</td></tr>
+        <tr><td><code>public_key</code> / <code>public_key_base64</code> / <code>public_key_file</code></td><td>none</td><td><code>RS*</code> / <code>ES*</code> tokens refused, warning logged</td></tr>
+        <tr><td><code>audience</code></td><td>none</td><td>the <code>aud</code> claim is not checked</td></tr>
+        <tr><td><code>leeway_seconds</code></td><td><code>0</code></td><td>no clock-skew tolerance for <code>exp</code>/<code>nbf</code></td></tr>
+      </tbody>
+    </table></div>
+    <p style="color:var(--ink-2);font-size:14.5px">There is no built-in key and no fallback secret or path. With no key configured the plugin refuses every token and leaves the rest of the chain alone, so <code>internal</code> password authentication keeps working.</p>
+
     <span class="filetab">token — what the client already sends</span>
 <pre><span class="c">% AMQP password field, unchanged:</span>
 token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;</span>

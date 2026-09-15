@@ -59,9 +59,23 @@ plugin picks one based on the algorithm declared by each token.
 ].
 ```
 
-Keys are read once and cached; changing a config value reloads them. If no
-usable key is configured, token logins are refused and a warning is logged —
-password authentication is unaffected. Keys never ship with the plugin.
+### Settings
+
+| setting | default | when not configured |
+|---|---|---|
+| `key` / `key_base64` / `key_file` | *(none)* | `HS*` tokens are refused and a warning is logged |
+| `public_key` / `public_key_base64` / `public_key_file` | *(none)* | `RS*` / `ES*` tokens are refused and a warning is logged |
+| `audience` | *(none)* | the `aud` claim is not checked |
+| `leeway_seconds` | `0` | `exp` / `nbf` are compared against the clock with no tolerance |
+
+Within each key group the first configured form wins, in the order listed
+above. Nothing has a built-in key: the plugin never ships with one, and never
+falls back to a default secret or path.
+
+**If no key at all is configured the plugin simply refuses every token** — it
+does not interfere with the rest of the chain, so `internal` username/password
+authentication keeps working normally. Keys are read once and cached; changing
+a config value reloads them.
 
 ## Token format
 

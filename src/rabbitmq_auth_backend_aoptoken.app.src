@@ -5,6 +5,6 @@
     {registered, []},
     {applications, [kernel, stdlib, crypto, rabbit_common, rabbit]},
     {optional_applications, []},
-    {env, []},
+    {env, [{leeway_seconds, 0}]},
     {broker_version_requirements, []}
 ]}.
