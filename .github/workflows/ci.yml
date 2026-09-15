@@ -4,20 +4,33 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  # Run the test suite against each RabbitMQ line's real rabbit_common, from a
-  # mainstream version through the latest. Passing means that version exposes
-  # the API the plugin depends on and the plugin behaves correctly on it.
+  # Run the test suite against the real rabbit_common of every supported
+  # RabbitMQ line, at that line's latest patch release. Passing means the line
+  # still exposes the API the plugin depends on and the plugin behaves
+  # correctly against it.
+  #
+  # Each line is built on an OTP it actually ships with. The last entry pins
+  # 4.3 to OTP 28 as well, to catch a future runtime breaking the source before
+  # an OTP 28 artifact is ever needed.
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        rmq: ['3.11.28', '3.12.14', '3.13.7', '4.0.5', '4.1.1']
-    name: RabbitMQ ${{ matrix.rmq }}
+        include:
+          - { rmq: '3.11.28', otp: '26' }
+          - { rmq: '3.12.14', otp: '26' }
+          - { rmq: '3.13.7',  otp: '26' }
+          - { rmq: '4.0.9',   otp: '26' }
+          - { rmq: '4.1.8',   otp: '27' }
+          - { rmq: '4.2.9',   otp: '27' }
+          - { rmq: '4.3.6',   otp: '27' }
+          - { rmq: '4.3.6',   otp: '28' }
+    name: RabbitMQ ${{ matrix.rmq }} on OTP ${{ matrix.otp }}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
-        with: { otp-version: '26', rebar3-version: '3' }
+        with: { otp-version: '${{ matrix.otp }}', rebar3-version: '3' }
       - name: EUnit
         run: ./run-tests.sh --rmq-release ${{ matrix.rmq }}
       - name: Package .ez

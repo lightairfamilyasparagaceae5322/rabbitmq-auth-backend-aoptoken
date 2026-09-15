@@ -163,10 +163,11 @@ which is JWT-based and unchanged in shape across Pulsar 2.x–4.x.
 The plugin is **not pinned to a RabbitMQ version**. It imposes no
 `broker_version_requirements`, and its source uses only the
 `rabbit_authn_backend` behaviour and the `#auth_user{}` record — both unchanged
-across RabbitMQ 3.8–4.0. The `3.12.14` seen in `rebar.config` and the build
+across RabbitMQ 3.8–4.3. The `3.12.14` seen in `rebar.config` and the build
 notes is only the reference used to fetch headers and to verify against; the
-compiled plugin is expected to load on any 3.11–4.0 broker whose OTP matches
-the artifact (see the table below). Verified on RabbitMQ 3.12.14 / OTP 26.
+compiled plugin is expected to load on any 3.11–4.3 broker whose OTP matches
+the artifact (see the table below). Verified end to end on RabbitMQ 3.12.14 /
+OTP 26 against a running broker.
 
 The binary `.ez` is tied to the **Erlang/OTP** it was compiled on. BEAM is
 forward-compatible: code compiled on OTP *N* loads on OTP *N*, *N+1* and *N+2*
@@ -236,7 +237,9 @@ signature paths are exercised.
 ./run-tests.sh --rmq-release 3.13.7     # or: ./run-tests.sh <rabbit_common dir>
 ```
 
-CI runs the suite against RabbitMQ 3.11, 3.12, 3.13, 4.0 and 4.1.
+CI runs the suite against every supported RabbitMQ line at its latest patch
+release — 3.11, 3.12, 3.13, 4.0, 4.1, 4.2 and 4.3 — each on an OTP that line
+ships with, plus 4.3 on OTP 28 to catch a future runtime breaking the source.
 
 ## Install
 
