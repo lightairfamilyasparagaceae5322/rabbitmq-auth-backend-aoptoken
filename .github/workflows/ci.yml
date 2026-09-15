@@ -4,32 +4,22 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  # Prove the plugin compiles against the RabbitMQ API of each line,
-  # from a mainstream version through the latest — on a compatible OTP.
+  # Compile the plugin against each RabbitMQ line's real headers,
+  # from a mainstream version through latest and main. If it compiles,
+  # that version exposes the API the plugin depends on.
   compat:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {otp: '25', rabbit_common: '3.11.28'}
-          - {otp: '25', rabbit_common: '3.12.14'}
-          - {otp: '26', rabbit_common: '3.13.7'}
-          - {otp: '27', rabbit_common: '4.0.5'}
-          - {otp: '27', rabbit_common: '4.1.1'}
-    name: rabbit_common ${{ matrix.rabbit_common }} / OTP ${{ matrix.otp }}
+        rmq: ['v3.11.28', 'v3.12.14', 'v3.13.7', 'v4.0.5', 'v4.1.1', 'main']
+    name: RabbitMQ ${{ matrix.rmq }}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{ matrix.otp }}
+          otp-version: '26'
           rebar3-version: '3'
-      - name: Pin rabbit_common for this matrix cell
-        run: |
-          sed -i 's/{rabbit_common, "[^"]*"}/{rabbit_common, "${{ matrix.rabbit_common }}"}/' rebar.config
-          grep rabbit_common rebar.config
-      - name: Compile against this RabbitMQ version
-        run: rebar3 compile
-      - name: Package .ez
-        run: ./build-ez.sh "$(ls -d _build/default/lib/rabbit_common)"
+      - name: Compile against ${{ matrix.rmq }} headers
+        run: ./build-ez.sh --download ${{ matrix.rmq }}
       - run: ls -la _build/*.ez
