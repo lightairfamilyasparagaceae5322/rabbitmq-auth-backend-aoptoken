@@ -61,9 +61,13 @@ The client sends it in the password field prefixed with `token:`, e.g.
 
 ## Compatibility
 
-The source is version-agnostic: it uses only the `rabbit_authn_backend`
-behaviour and the `#auth_user{}` record, which are unchanged across RabbitMQ
-3.8–4.0.
+The plugin is **not pinned to a RabbitMQ version**. It imposes no
+`broker_version_requirements`, and its source uses only the
+`rabbit_authn_backend` behaviour and the `#auth_user{}` record — both unchanged
+across RabbitMQ 3.8–4.0. The `3.12.14` seen in `rebar.config` and the build
+notes is only the reference used to fetch headers and to verify against; the
+compiled plugin is expected to load on any 3.11–4.0 broker whose OTP matches
+the artifact (see the table below). Verified on RabbitMQ 3.12.14 / OTP 26.
 
 The binary `.ez` is tied to the **Erlang/OTP** it was compiled on. BEAM is
 forward-compatible: code compiled on OTP *N* loads on OTP *N*, *N+1* and *N+2*
