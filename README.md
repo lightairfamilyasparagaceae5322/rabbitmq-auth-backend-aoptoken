@@ -127,11 +127,11 @@ matches, build from source against your version (below).
 
 ## Use the prebuilt release (no build needed)
 
-A ready-to-use `.ez` is attached to each [GitHub release](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases). It is built per OTP line (see Compatibility above). Match your broker's OTP major version.
+A ready-to-use `.ez` is attached to each GitHub release — grab the [latest one](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases/latest), or browse [all releases](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases). It is built per OTP line (see Compatibility above). Match your broker's OTP major version.
 
 ```sh
 # 1. drop the plugin into the broker's plugins directory
-cp rabbitmq_auth_backend_aoptoken-0.1.0-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
+cp rabbitmq_auth_backend_aoptoken-0.2.0-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
 
 # 2. enable it
 rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken

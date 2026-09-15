@@ -76,6 +76,7 @@ h1,h2,h3{text-wrap:balance; line-height:1.15; margin:0}
 .btn.primary:hover{text-decoration:none; filter:brightness(1.05)}
 .btn.ghost{border-color:var(--line-2); color:var(--ink)}
 .btn.ghost:hover{text-decoration:none; border-color:var(--accent)}
+.dlver{opacity:.72}
 .metabar{display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:34px; font-family:var(--mono); font-size:12.5px; color:var(--ink-3)}
 .metabar b{color:var(--ink-2); font-weight:500}
 
@@ -165,7 +166,7 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
     <h1>Password <span class="q">or</span> token.<br>Same account. No client changes.</h1>
     <p class="lede">A RabbitMQ auth backend that accepts a <b>pre-issued JWT</b> — the opaque <code>token:&lt;jwt&gt;</code> style used by Pulsar/AoP brokers — right alongside ordinary username/password auth, for the very same user. Built for teams migrating off a Pulsar-based broker onto native RabbitMQ without touching a single client.</p>
     <div class="cta">
-      <a class="btn primary" id="ghstar" href="#">View on GitHub</a>
+      <a class="btn primary dl" href="https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases/latest">Download <span class="dlver">latest release</span></a>
       <a class="btn ghost" href="#how">See how it works</a>
     </div>
     <div class="metabar">
@@ -321,13 +322,13 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
     <div class="sec-label">Getting started</div>
     <h2>Install</h2>
     <ol class="install">
-      <li>Build the plugin as an <code>.ez</code> against your broker's version with the standard RabbitMQ plugin toolchain, and drop it into <code>plugins/</code>.</li>
+      <li>Download the <code>.ez</code> from the latest release — pick the <code>-otpNN</code> matching your broker's Erlang major version — and drop it into <code>plugins/</code>. (Or build it yourself with the standard RabbitMQ plugin toolchain.)</li>
       <li>Enable it: <code>rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken</code></li>
       <li>Set <b>key_file</b> in <code>advanced.config</code> and the <b>auth chain</b> in <code>rabbitmq.conf</code> (see above).</li>
       <li>Restart the node, then verify with both a <b>password</b> client and a <b>token</b> client on the same account.</li>
     </ol>
     <div class="cta">
-      <a class="btn primary" id="ghstar2" href="#">Get it on GitHub</a>
+      <a class="btn primary dl" href="https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases/latest">Download <span class="dlver">latest release</span></a>
       <a class="btn ghost" href="#config">Back to config</a>
     </div>
   </div>
@@ -345,12 +346,23 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
 <script>
 // GitHub links resolve from the Pages host (user.github.io/repo → user/repo)
 (function(){
-  var repo="rabbitmq-auth-backend-aoptoken", url="https://github.com/martinx/"+repo;
+  var owner="martinx", repo="rabbitmq-auth-backend-aoptoken";
   try{
     var h=location.hostname, parts=location.pathname.split("/").filter(Boolean);
-    if(h.endsWith("github.io")){ var owner=h.split(".")[0]; var r=parts[0]||repo; url="https://github.com/"+owner+"/"+r; }
+    if(h.endsWith("github.io")){ owner=h.split(".")[0]; repo=parts[0]||repo; }
   }catch(e){}
-  ["ghtop","ghstar","ghstar2","ghfoot"].forEach(function(id){var el=document.getElementById(id); if(el) el.href=url;});
+  var url="https://github.com/"+owner+"/"+repo;
+  ["ghtop","ghfoot"].forEach(function(id){var el=document.getElementById(id); if(el) el.href=url;});
+  // Download buttons point at GitHub's permanent "latest release" redirect, so they
+  // stay correct with no JS. If the API is reachable, name the actual version.
+  [].forEach.call(document.querySelectorAll("a.dl"), function(el){ el.href=url+"/releases/latest"; });
+  fetch("https://api.github.com/repos/"+owner+"/"+repo+"/releases/latest")
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || !d.tag_name) return;
+      [].forEach.call(document.querySelectorAll(".dlver"), function(el){ el.textContent=d.tag_name; });
+    })
+    .catch(function(){});
 })();
 // theme toggle: cycle system → light → dark
 (function(){
