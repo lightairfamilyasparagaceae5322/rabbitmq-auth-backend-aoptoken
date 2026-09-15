@@ -163,14 +163,15 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
   <div class="wrap">
     <div class="eyebrow">RabbitMQ authentication plugin · Erlang</div>
     <h1>Password <span class="q">or</span> token.<br>Same account. No client changes.</h1>
-    <p class="lede">A RabbitMQ auth backend that accepts a <b>pre-issued HS256 JWT</b> — the opaque <code>token:&lt;jwt&gt;</code> style used by Pulsar/AoP brokers — right alongside ordinary username/password auth, for the very same user. Built for teams migrating off a Pulsar-based broker onto native RabbitMQ without touching a single client.</p>
+    <p class="lede">A RabbitMQ auth backend that accepts a <b>pre-issued JWT</b> — the opaque <code>token:&lt;jwt&gt;</code> style used by Pulsar/AoP brokers — right alongside ordinary username/password auth, for the very same user. Built for teams migrating off a Pulsar-based broker onto native RabbitMQ without touching a single client.</p>
     <div class="cta">
       <a class="btn primary" id="ghstar" href="#">View on GitHub</a>
       <a class="btn ghost" href="#how">See how it works</a>
     </div>
     <div class="metabar">
       <span><b>Verified</b> RabbitMQ 3.11–4.1</span>
-      <span><b>Auth</b> HS256 · <code>sub</code> claim</span>
+      <span><b>Tests</b> 28 EUnit, in CI</span>
+      <span><b>Algorithms</b> HS · RS · ES</span>
       <span><b>OTP</b> 25–29</span>
       <span><b>License</b> MIT</span>
     </div>
@@ -215,7 +216,7 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
         <span class="idx">2</span>
         <div class="body">
           <div class="name">rabbit_auth_backend_aoptoken <span style="color:var(--ink-3);font-weight:400">(this plugin)</span></div>
-          <div class="desc">Sees the <code>token:</code> prefix, verifies the JWT's HS256 signature with the configured key, takes <code>sub</code> as the identity.</div>
+          <div class="desc">Sees the <code>token:</code> prefix, verifies the JWT signature with the configured key (HS/RS/ES, per the token's <code>alg</code>), checks <code>exp</code>/<code>nbf</code>, and takes <code>sub</code> as the identity.</div>
         </div>
         <span class="verdict pass">valid → token</span>
       </div>
@@ -254,7 +255,11 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
     <span class="filetab">advanced.config</span>
 <pre>[
   {rabbitmq_auth_backend_aoptoken, [
+    <span class="c">%% symmetric secret for HS256/384/512</span>
     {<span class="k">key_file</span>, <span class="s">"/etc/rabbitmq/token.key"</span>}
+
+    <span class="c">%% or a public key for RS*/ES*:</span>
+    <span class="c">%% {public_key_file, "/etc/rabbitmq/token-public.pem"}</span>
   ]}
 ].</pre>
 
@@ -271,9 +276,14 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
     <h2>What it does, precisely</h2>
     <div class="feat">
       <div class="card">
-        <span class="m">signature, not a list</span>
+        <span class="m">HS · RS · ES</span>
         <h3>Verifies, doesn't allow-list</h3>
-        <p>Every token is checked against the signing key with a constant-time HMAC compare. Any validly signed token works — including ones you never captured and ones issued later.</p>
+        <p>The algorithm comes from the token header: HMAC with a shared secret, or RSA/ECDSA with a public key — Pulsar's <code>tokenSecretKey</code> and <code>tokenPublicKey</code> modes. Any validly signed token works, including ones issued later. <code>alg: none</code> is rejected.</p>
+      </div>
+      <div class="card">
+        <span class="m">exp · nbf · aud</span>
+        <h3>Claims are enforced</h3>
+        <p>Expiry and not-before are honoured when present, with optional clock-skew leeway, and an expected audience can be required. Checked only after the signature verifies.</p>
       </div>
       <div class="card">
         <span class="m">identity = sub</span>
