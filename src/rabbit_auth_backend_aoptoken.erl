@@ -105,12 +105,28 @@ verify_safe(Jwt) ->
 verify(Jwt, Key) ->
     case binary:split(Jwt, <<".">>, [global]) of
         [H, P, S] ->
-            Signing = <<H/binary, ".", P/binary>>,
-            Expected = b64url(crypto:mac(hmac, sha256, Key, Signing)),
-            case consttime_eq(Expected, S) of
-                true  -> sub_of(P);
-                false -> error
+            case hash_alg(H) of
+                {ok, Hash} ->
+                    Signing = <<H/binary, ".", P/binary>>,
+                    Expected = b64url(crypto:mac(hmac, Hash, Key, Signing)),
+                    case consttime_eq(Expected, S) of
+                        true  -> sub_of(P);
+                        false -> error
+                    end;
+                error -> error   %% unsupported/absent alg (e.g. none, RS*, ES*)
             end;
+        _ -> error
+    end.
+
+%% Map the JWT header "alg" to an HMAC hash. Only the HS family (symmetric,
+%% Pulsar tokenSecretKey mode) is supported; asymmetric algs (RS*/ES*) use a
+%% public key and are out of scope, and "none" is always rejected.
+hash_alg(HeaderSeg) ->
+    Json = b64url_decode(HeaderSeg),
+    case re:run(Json, "\"alg\"\s*:\s*\"([^\"]+)\"", [{capture,[1],binary}]) of
+        {match, [<<"HS256">>]} -> {ok, sha256};
+        {match, [<<"HS384">>]} -> {ok, sha384};
+        {match, [<<"HS512">>]} -> {ok, sha512};
         _ -> error
     end.
 

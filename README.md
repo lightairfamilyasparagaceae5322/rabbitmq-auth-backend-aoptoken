@@ -55,9 +55,15 @@ The key never ships with the plugin.
 
 ## Token format
 
-Standard JWT, `alg=HS256`, payload contains at least `{"sub":"<username>"}`.
-The client sends it in the password field prefixed with `token:`, e.g.
-`token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<sig>`.
+Standard JWT signed with a symmetric key (the HS family), payload contains at
+least `{"sub":"<username>"}`. The client sends it in the password field prefixed
+with `token:`, e.g. `token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<sig>`.
+
+The signing algorithm is read from the JWT header. **HS256, HS384 and HS512**
+are supported (the symmetric mode used by Pulsar's `tokenSecretKey`). Asymmetric
+algorithms (RS*/ES*, i.e. Pulsar's `tokenPublicKey` mode) and `alg: none` are
+rejected. This matches Apache Pulsar's built-in token authentication, which is
+JWT-based and unchanged in shape across Pulsar 2.x–4.x.
 
 ## Compatibility
 
