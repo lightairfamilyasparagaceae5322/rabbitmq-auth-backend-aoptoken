@@ -4,22 +4,19 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  # Compile the plugin against each RabbitMQ line's real headers,
-  # from a mainstream version through latest and main. If it compiles,
-  # that version exposes the API the plugin depends on.
+  # Compile against each RabbitMQ line's real rabbit_common (from its
+  # generic-unix release). Compiling clean means that version exposes the
+  # API the plugin depends on. Covers a mainstream version through latest.
   compat:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        rmq: ['v3.11.28', 'v3.12.14', 'v3.13.7', 'v4.0.5', 'v4.1.1', 'main']
+        rmq: ['3.11.28', '3.12.14', '3.13.7', '4.0.5', '4.1.1']
     name: RabbitMQ ${{ matrix.rmq }}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
-        with:
-          otp-version: '26'
-          rebar3-version: '3'
-      - name: Compile against ${{ matrix.rmq }} headers
-        run: ./build-ez.sh --download ${{ matrix.rmq }}
+        with: { otp-version: '26', rebar3-version: '3' }
+      - run: ./build-ez.sh --rmq-release ${{ matrix.rmq }}
       - run: ls -la _build/*.ez

@@ -9,15 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        otp: ['26', '27']   # BEAM loads on the build OTP and up to +2 (covers OTP 26-29)
+        otp: ['26', '27']   # BEAM loads on the build OTP and up to +2 (OTP 26-29)
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ matrix.otp }}
-          rebar3-version: '3'
-      - name: Build .ez (API headers are version-stable; ref only fixes the source)
-        run: ./build-ez.sh --download v3.13.7
+        with: { otp-version: '${{ matrix.otp }}', rebar3-version: '3' }
+      - run: ./build-ez.sh --rmq-release 3.13.7
       - uses: softprops/action-gh-release@v2
-        with:
-          files: _build/*.ez
+        with: { files: _build/*.ez }
