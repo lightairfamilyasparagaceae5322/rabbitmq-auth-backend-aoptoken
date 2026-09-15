@@ -9,9 +9,8 @@ jobs:
     strategy:
       matrix:
         include:
-          # BEAM loads on the build OTP and up to +2, so these two artifacts
-          # cover OTP 25-29 (RabbitMQ 3.11 through the latest 4.x line).
           - {otp: '25', runner: 'ubuntu-22.04'}   # covers OTP 25/26/27
+          - {otp: '26', runner: 'ubuntu-latest'}  # exact match for ADMQ (RabbitMQ 3.12.14 on OTP 26)
           - {otp: '27', runner: 'ubuntu-latest'}  # covers OTP 27/28/29
     runs-on: ${{ matrix.runner }}
     steps:
