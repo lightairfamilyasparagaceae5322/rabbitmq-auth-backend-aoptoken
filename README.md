@@ -28,36 +28,67 @@ a mode:
 
 1. `internal` hashes the presented secret and compares it to the stored
    password. Match → password auth.
-2. Otherwise this backend sees the `token:` prefix, verifies the JWT's HS256
-   signature with a configured key, and takes the `sub` claim as the identity.
+2. Otherwise this backend sees the `token:` prefix, verifies the JWT's
+   signature with a configured key (the algorithm comes from the token's own
+   header), and takes the `sub` claim as the identity.
 3. Authorization uses `internal` (the vhost permissions already defined for
    that identity).
 
 ## Configuration
 
-Everything is set under the `rabbitmq_auth_backend_aoptoken` application in
-`advanced.config`. Configure a symmetric secret, a public key, or both — the
-plugin picks one based on the algorithm declared by each token.
+Configure a symmetric secret, a public key, or both — the plugin picks one
+based on the algorithm declared by each token.
+
+Settings go in `rabbitmq.conf`, alongside the auth chain itself:
+
+```ini
+## symmetric secret for HS256/HS384/HS512 — one of:
+auth_aoptoken.key_file = /etc/rabbitmq/token.key
+# auth_aoptoken.key_base64 = Jw...
+# auth_aoptoken.key = ...
+
+## public key for RS*/ES* (PEM, or DER SubjectPublicKeyInfo) — one of:
+# auth_aoptoken.public_key_file = /etc/rabbitmq/token-public.pem
+# auth_aoptoken.public_key_base64 = LS0t...
+# auth_aoptoken.public_key = -----BEGIN PUBLIC KEY-----...
+
+## optional
+# auth_aoptoken.audience = my-cluster   ## require a matching "aud" claim
+# auth_aoptoken.leeway_seconds = 0      ## clock skew allowance for exp/nbf
+```
+
+Prefer the `*_file` forms for secrets: `rabbitmq.conf` tends to end up in
+configuration management and backups, whereas a key file can be
+permission-bound.
+
+<details>
+<summary><code>advanced.config</code> instead</summary>
+
+The same settings live under the `rabbitmq_auth_backend_aoptoken` application,
+should you prefer Erlang terms or need to template the file:
 
 ```erlang
 [
   {rabbitmq_auth_backend_aoptoken, [
-     %% symmetric secret for HS256/HS384/HS512 — one of:
      {key_file,          "/etc/rabbitmq/token.key"},
      %% {key_base64,     "Jw..."},
      %% {key,            <<"...">>},
-
-     %% public key for RS*/ES* (PEM, or DER SubjectPublicKeyInfo) — one of:
      %% {public_key_file,   "/etc/rabbitmq/token-public.pem"},
      %% {public_key_base64, "LS0t..."},
      %% {public_key,        <<"-----BEGIN PUBLIC KEY-----...">>},
-
-     %% optional
-     %% {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
-     %% {leeway_seconds, 0}                  %% clock skew allowance for exp/nbf
+     %% {audience,       <<"my-cluster">>},
+     %% {leeway_seconds, 0}
   ]}
 ].
 ```
+
+Both files are read; `advanced.config` wins where they overlap. Note that
+`advanced.config` is only picked up from the standard configuration directory
+(`/etc/rabbitmq` for the Debian and RPM packages,
+`$RABBITMQ_HOME/etc/rabbitmq` for the generic UNIX build). Point
+`RABBITMQ_ADVANCED_CONFIG_FILE` elsewhere and the filename must include the
+`.config` suffix, or the file is silently ignored.
+</details>
 
 ### Settings
 
@@ -76,6 +107,36 @@ falls back to a default secret or path.
 does not interfere with the rest of the chain, so `internal` username/password
 authentication keeps working normally. Keys are read once and cached; changing
 a config value reloads them.
+
+## Logging
+
+Every decision this backend makes is reported at debug level, so an auth chain
+can be traced without a packet capture:
+
+```ini
+# rabbitmq.conf
+log.file.level = debug
+```
+
+```
+rabbitmq_auth_backend_aoptoken: 'app1' presented a bearer token (84 bytes)
+rabbitmq_auth_backend_aoptoken: accepted a HS256 token presented as 'app1'; authenticating as its subject 'app1'
+rabbitmq_auth_backend_aoptoken: refused a HS256 token presented as 'app1': token has expired
+rabbitmq_auth_backend_aoptoken: 'app1' presented a password rather than a bearer token, leaving it to the rest of the chain
+```
+
+The line naming both the login the client connected as and the subject it was
+authenticated as is usually the one you want: those differ whenever a client's
+configured username does not match the identity inside its token.
+
+**Tokens and keys are never written to the log, at any level** — a presented
+token is reported only by its size. The algorithm is read from the token header
+before any signature has been checked, so it is treated as untrusted: it is
+truncated and stripped to identifier characters before being logged or returned
+to the client, and cannot flood the log or forge a line break in it.
+
+A missing or unreadable key is reported once per authentication at warning
+level, and is the one case worth alerting on.
 
 ## Token format
 
@@ -131,13 +192,13 @@ A ready-to-use `.ez` is attached to each GitHub release — grab the [latest one
 
 ```sh
 # 1. drop the plugin into the broker's plugins directory
-cp rabbitmq_auth_backend_aoptoken-0.2.0-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
+cp rabbitmq_auth_backend_aoptoken-0.2.1-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
 
 # 2. enable it
 rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken
 
-# 3. point it at the signing key (advanced.config) and set the chain
-#    (rabbitmq.conf) as shown above, then restart the node
+# 3. set the key and the auth chain in rabbitmq.conf as shown above,
+#    then restart the node
 rabbitmqctl shutdown && rabbitmq-server -detached
 
 # 4. verify — same account, both credentials
@@ -179,10 +240,10 @@ CI runs the suite against RabbitMQ 3.11, 3.12, 3.13, 4.0 and 4.1.
 
 ## Install
 
-1. Build/package the plugin as `.ez` for your broker version and drop it into
-   `plugins/`.
+1. Download the `.ez` for your broker's OTP line from the latest release (or
+   build it yourself) and drop it into `plugins/`.
 2. `rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken`
-3. Set `key_file` (advanced.config) and the auth chain (rabbitmq.conf) as above.
+3. Set `auth_aoptoken.key_file` and the auth chain in `rabbitmq.conf` as above.
 4. Restart the node and verify with both a password client and a token client.
 
 ## Security notes

@@ -259,25 +259,21 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
 <section id="config">
   <div class="wrap">
     <div class="sec-label">Configuration</div>
-    <h2>Two files, four lines</h2>
-    <p class="sec-intro">Enable the chain, then point the plugin at the issuer's signing key. Authorization stays with internal, so your existing users, vhosts and permissions are untouched.</p>
+    <h2>One file, five lines</h2>
+    <p class="sec-intro">Enable the chain, then point the plugin at the issuer's signing key — both in the file you already edit. Authorization stays with internal, so your existing users, vhosts and permissions are untouched.</p>
 
     <span class="filetab">rabbitmq.conf</span>
 <pre><span class="c"># try password first, then verify a token</span>
 <span class="k">auth_backends.1</span> = internal
 <span class="k">auth_backends.2.authn</span> = rabbit_auth_backend_aoptoken
-<span class="k">auth_backends.2.authz</span> = internal</pre>
+<span class="k">auth_backends.2.authz</span> = internal
 
-    <span class="filetab">advanced.config</span>
-<pre>[
-  {rabbitmq_auth_backend_aoptoken, [
-    <span class="c">%% symmetric secret for HS256/384/512</span>
-    {<span class="k">key_file</span>, <span class="s">"/etc/rabbitmq/token.key"</span>}
+<span class="c"># symmetric secret for HS256/384/512</span>
+<span class="k">auth_aoptoken.key_file</span> = /etc/rabbitmq/token.key
 
-    <span class="c">%% or a public key for RS*/ES*:</span>
-    <span class="c">%% {public_key_file, "/etc/rabbitmq/token-public.pem"}</span>
-  ]}
-].</pre>
+<span class="c"># or a public key for RS*/ES*:</span>
+<span class="c"># auth_aoptoken.public_key_file = /etc/rabbitmq/token-public.pem</span></pre>
+    <p style="color:var(--ink-2);font-size:14.5px">Settings can also go in <code>advanced.config</code> as Erlang terms, which wins where the two overlap. Prefer the <code>_file</code> forms for secrets — <code>rabbitmq.conf</code> tends to end up in configuration management and backups.</p>
 
     <h3 style="font-size:16px;margin:30px 0 4px">Settings and defaults</h3>
     <div class="tw"><table>
@@ -339,7 +335,7 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
     <ol class="install">
       <li>Download the <code>.ez</code> from the latest release — pick the <code>-otpNN</code> matching your broker's Erlang major version — and drop it into <code>plugins/</code>. (Or build it yourself with the standard RabbitMQ plugin toolchain.)</li>
       <li>Enable it: <code>rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken</code></li>
-      <li>Set <b>key_file</b> in <code>advanced.config</code> and the <b>auth chain</b> in <code>rabbitmq.conf</code> (see above).</li>
+      <li>Set the <b>key</b> and the <b>auth chain</b> in <code>rabbitmq.conf</code> (see above).</li>
       <li>Restart the node, then verify with both a <b>password</b> client and a <b>token</b> client on the same account.</li>
     </ol>
     <div class="cta">

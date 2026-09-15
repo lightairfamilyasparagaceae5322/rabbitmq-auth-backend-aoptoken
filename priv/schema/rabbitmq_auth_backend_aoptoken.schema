@@ -1,0 +1,55 @@
+%% ---------------------------------------------------------------------------
+%% RabbitMQ auth backend for pre-issued JWT bearer tokens.
+%%
+%% Exposes the plugin's settings in rabbitmq.conf, so an operator configures it
+%% in the file they already edit rather than in advanced.config's Erlang terms:
+%%
+%%   auth_aoptoken.key_file        = /etc/rabbitmq/token.key
+%%   auth_aoptoken.public_key_file = /etc/rabbitmq/token-public.pem
+%%   auth_aoptoken.audience        = my-cluster
+%%   auth_aoptoken.leeway_seconds  = 30
+%%
+%% Every mapping targets the same application environment advanced.config
+%% writes, so both remain valid and existing setups keep working.
+%%
+%% Prefer the *_file forms for secrets: rabbitmq.conf tends to end up in
+%% configuration management and backups, a key file can be permission-bound.
+%% ---------------------------------------------------------------------------
+
+%% Shared secret for HS256/384/512 — set exactly one of these three.
+{mapping, "auth_aoptoken.key", "rabbitmq_auth_backend_aoptoken.key", [
+    {datatype, string}
+]}.
+
+{mapping, "auth_aoptoken.key_base64", "rabbitmq_auth_backend_aoptoken.key_base64", [
+    {datatype, string}
+]}.
+
+{mapping, "auth_aoptoken.key_file", "rabbitmq_auth_backend_aoptoken.key_file", [
+    {datatype, string}
+]}.
+
+%% Public key for RS256/384/512 and ES256/384/512, PEM or DER
+%% SubjectPublicKeyInfo — set exactly one of these three.
+{mapping, "auth_aoptoken.public_key", "rabbitmq_auth_backend_aoptoken.public_key", [
+    {datatype, string}
+]}.
+
+{mapping, "auth_aoptoken.public_key_base64", "rabbitmq_auth_backend_aoptoken.public_key_base64", [
+    {datatype, string}
+]}.
+
+{mapping, "auth_aoptoken.public_key_file", "rabbitmq_auth_backend_aoptoken.public_key_file", [
+    {datatype, string}
+]}.
+
+%% Require a matching "aud" claim. Unset means the claim is not checked.
+{mapping, "auth_aoptoken.audience", "rabbitmq_auth_backend_aoptoken.audience", [
+    {datatype, string}
+]}.
+
+%% Clock skew allowed when checking "exp" and "nbf", in seconds.
+{mapping, "auth_aoptoken.leeway_seconds", "rabbitmq_auth_backend_aoptoken.leeway_seconds", [
+    {datatype, integer},
+    {validators, ["non_negative_integer"]}
+]}.

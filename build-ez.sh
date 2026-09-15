@@ -18,6 +18,10 @@ rm -rf "${OUT}"; mkdir -p "${OUT}/ebin"
 erlc -I "${INCROOT}" -pa "${RCDIR}/ebin" -o "${OUT}/ebin" src/rabbit_auth_backend_aoptoken.erl
 sed 's/{modules, \[\]}/{modules, [rabbit_auth_backend_aoptoken]}/' \
     src/${APP}.app.src > "${OUT}/ebin/${APP}.app"
+# The cuttlefish schema has to travel inside the archive: the broker collects
+# priv/schema from every enabled plugin to resolve rabbitmq.conf settings.
+mkdir -p "${OUT}/priv"
+cp -R priv/schema "${OUT}/priv/"
 EZ="${APP}-${VSN}-otp${OTP}.ez"
 ( cd _build && rm -f "${EZ}" && zip -qr "${EZ}" "${APP}-${VSN}" )
 echo ">> built: _build/${EZ}"
