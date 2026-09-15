@@ -75,6 +75,7 @@ all_test_() ->
         , {"an unconfigured key refuses rather than crashes", fun no_key_configured/0}
         , {"a base64 secret is accepted",  fun secret_from_base64/0}
         , {"a secret file is accepted",    fun secret_from_file/0}
+        , {"changing the key at runtime takes effect", fun key_change_takes_effect/0}
         , {"props may be a map or a list", fun props_shapes/0}
         ]
      end}.
@@ -238,6 +239,21 @@ no_password() ->
 no_key_configured() ->
     reset(),
     ?assertMatch(refused, auth(hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}))).
+
+%% The key is cached, but keyed by its source: changing the configuration must
+%% be picked up on the next authentication, with no restart and no cache reset.
+%% This is what lets an operator rotate a key, or correct a wrong one, without
+%% dropping a single connection.
+key_change_takes_effect() ->
+    use_secret(),
+    Token = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    ?assertEqual({ok, ?USER}, auth(Token)),
+    %% point at a different secret without touching the cache
+    application:set_env(?APP, key, <<"a-different-32-byte-secret-01234">>),
+    ?assertMatch(refused, auth(Token)),
+    %% and back again
+    application:set_env(?APP, key, ?SECRET),
+    ?assertEqual({ok, ?USER}, auth(Token)).
 
 secret_from_base64() ->
     reset(),

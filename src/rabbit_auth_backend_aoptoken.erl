@@ -270,7 +270,7 @@ decode_json(Segment) ->
 symmetric_key() ->
     resolve(symmetric_key,
             [{key, inline}, {key_base64, base64}, {key_file, file}],
-            fun load_bytes/1,
+            fun(Bytes) -> Bytes end,
             no_symmetric_key_configured).
 
 %% Public key for RS*/ES*: public_key | public_key_base64 | public_key_file.
@@ -278,7 +278,7 @@ public_key() ->
     resolve(public_key,
             [{public_key, inline}, {public_key_base64, base64},
              {public_key_file, file}],
-            fun(Source) -> decode_public_key(load_bytes(Source)) end,
+            fun decode_public_key/1,
             no_public_key_configured).
 
 rsa_public_key() ->
@@ -301,7 +301,7 @@ named_curve(Oid)                         -> misconfigured({unsupported_curve, Oi
 %% Resolve a key from the first configured source, caching the result in
 %% persistent_term keyed by the source, so files are not re-read on every
 %% authentication and a configuration change is picked up automatically.
-resolve(CacheName, Sources, Load, MissingReason) ->
+resolve(CacheName, Sources, Transform, MissingReason) ->
     Source = case first_configured(Sources) of
                  undefined -> misconfigured(MissingReason);
                  Found     -> Found
@@ -311,10 +311,35 @@ resolve(CacheName, Sources, Load, MissingReason) ->
         {Source, Value} ->
             Value;
         _ ->
-            Value = Load(Source),
+            Bytes = load_bytes(Source),
+            Value = Transform(Bytes),
             persistent_term:put(CacheKey, {Source, Value}),
+            report_key(CacheName, Source, Bytes),
             Value
     end.
+
+%% Say which key material the node ended up using, once per load. Operators
+%% otherwise have no way to tell whether the running node picked up the key
+%% they think it did: the configuration only names a path or an encoded
+%% string, not the bytes behind it. The fingerprint is the first four bytes of
+%% its SHA-256, which identifies the key without disclosing it — compare it
+%% against `sha256sum` of the intended file, or across the nodes of a cluster.
+report_key(CacheName, {Kind, Value}, Bytes) ->
+    rabbit_log:info("~ts: loaded ~ts from ~ts (~b bytes, sha256:~ts)",
+                    [?APP, key_label(CacheName), source_label(Kind, Value),
+                     byte_size(Bytes), fingerprint(Bytes)]).
+
+key_label(symmetric_key) -> "symmetric key";
+key_label(public_key)    -> "public key".
+
+%% Never echo the key itself: an inline source is named, not printed.
+source_label(file,   Path) -> Path;
+source_label(inline, _)    -> <<"an inline value">>;
+source_label(base64, _)    -> <<"an inline base64 value">>.
+
+fingerprint(Bytes) ->
+    <<Short:4/binary, _/binary>> = crypto:hash(sha256, Bytes),
+    iolist_to_binary(string:lowercase(binary:encode_hex(Short))).
 
 first_configured([]) ->
     undefined;

@@ -135,6 +135,18 @@ before any signature has been checked, so it is treated as untrusted: it is
 truncated and stripped to identifier characters before being logged or returned
 to the client, and cannot flood the log or forge a line break in it.
 
+Each key is reported once at info level when it is first loaded, and again
+whenever the configuration changes:
+
+```
+rabbitmq_auth_backend_aoptoken: loaded symmetric key from /etc/rabbitmq/token.key (32 bytes, sha256:225c9ff2)
+```
+
+The fingerprint is the first four bytes of the key's SHA-256. It identifies the
+key without disclosing it, so it can be compared against `sha256sum` of the
+intended file, or across the nodes of a cluster, to confirm the running node
+picked up the key you meant. An inline key is named rather than printed.
+
 A missing or unreadable key is reported once per authentication at warning
 level, and is the one case worth alerting on.
 
