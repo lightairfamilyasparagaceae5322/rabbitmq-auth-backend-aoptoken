@@ -1,0 +1,24 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        otp: ['25', '26', '27']   # 各 OTP 编一个 .ez；BEAM 可在 编译版本~+2 的运行时加载
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: '3'
+      - name: Build .ez
+        run: ./build-ez.sh
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: _build/*.ez

@@ -26,7 +26,7 @@ user_login_authentication(_Username, AuthProps) ->
         {ok, Pwd} ->
             case strip_token(Pwd) of
                 {ok, Jwt} ->
-                    case verify(Jwt, key()) of
+                    case verify_safe(Jwt) of
                         {ok, Sub} ->
                             %% 身份取 token 的 sub（AoP 语义）
                             {ok, #auth_user{username = Sub, tags = [], impl = none}};
@@ -54,10 +54,53 @@ to_bin(_) -> <<>>.
 strip_token(<<"token:", Rest/binary>>) -> {ok, Rest};
 strip_token(_) -> notoken.
 
+%% Signing key resolution, in order of precedence, all via app config:
+%%   {key, <<"...">>}          inline raw key bytes
+%%   {key_base64, "..."}       inline key, base64-encoded
+%%   {key_file, "/path"}       key read from a file (raw bytes)
+%% Result is cached in persistent_term, keyed by the config value, so a
+%% config change is picked up automatically and the file is not re-read
+%% on every authentication.
 key() ->
-    Path = application:get_env(rabbitmq_auth_backend_aoptoken, key_file, undefined),
-    {ok, Bin} = file:read_file(Path),
-    Bin.
+    App = rabbitmq_auth_backend_aoptoken,
+    Cfg = case application:get_env(App, key) of
+              {ok, K} when is_binary(K)  -> {inline, K};
+              _ ->
+                  case application:get_env(App, key_base64) of
+                      {ok, B64}          -> {b64, iolist_to_binary(B64)};
+                      _ ->
+                          case application:get_env(App, key_file) of
+                              {ok, F}    -> {file, iolist_to_binary(F)};
+                              _          -> undefined
+                          end
+                  end
+          end,
+    resolve(Cfg).
+
+resolve(undefined) ->
+    error({rabbitmq_auth_backend_aoptoken, no_signing_key_configured});
+resolve(Cfg) ->
+    PtKey = {?MODULE, signing_key},
+    case persistent_term:get(PtKey, undefined) of
+        {Cfg, Bytes} -> Bytes;                 %% cached and config unchanged
+        _ ->
+            Bytes = load_key(Cfg),
+            persistent_term:put(PtKey, {Cfg, Bytes}),
+            Bytes
+    end.
+
+load_key({inline, K}) -> K;
+load_key({b64, B64})  -> base64:decode(B64);
+load_key({file, F})   ->
+    case file:read_file(F) of
+        {ok, Bin} -> Bin;
+        {error, R} -> error({rabbitmq_auth_backend_aoptoken, {cannot_read_key_file, F, R}})
+    end.
+
+verify_safe(Jwt) ->
+    try verify(Jwt, key())
+    catch _:_ -> error
+    end.
 
 verify(Jwt, Key) ->
     case binary:split(Jwt, <<".">>, [global]) of

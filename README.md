@@ -35,16 +35,23 @@ a mode:
 
 ## Configuration
 
-The signing key is read from a file (raw key bytes, as used by the issuer):
+The signing key is configurable via `advanced.config`, in this order of
+precedence:
 
 ```erlang
-%% advanced.config
 [
   {rabbitmq_auth_backend_aoptoken, [
-     {key_file, "/etc/rabbitmq/token.key"}
+     %% pick ONE:
+     {key_file,   "/etc/rabbitmq/token.key"}   %% raw key bytes read from a file
+     %% {key_base64, "Jw..."}                   %% inline, base64-encoded
+     %% {key,        <<"...">>}                 %% inline raw bytes
   ]}
 ].
 ```
+
+The key is read once and cached; changing the config value reloads it. If no
+key is configured, token logins are refused (password logins are unaffected).
+The key never ships with the plugin.
 
 ## Token format
 
@@ -52,13 +59,33 @@ Standard JWT, `alg=HS256`, payload contains at least `{"sub":"<username>"}`.
 The client sends it in the password field prefixed with `token:`, e.g.
 `token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<sig>`.
 
+## Compatibility
+
+The source is version-agnostic: it uses only the `rabbit_authn_backend`
+behaviour and the `#auth_user{}` record, which are unchanged across RabbitMQ
+3.8–4.0.
+
+The binary `.ez` is tied to the **Erlang/OTP** it was compiled on. BEAM is
+forward-compatible: code compiled on OTP *N* loads on OTP *N*, *N+1* and *N+2*
+(a newer runtime loads older BEAM, not the reverse). Each release therefore
+ships one `.ez` per OTP line — pick the one at or below your broker's OTP:
+
+| your broker's OTP | use the asset | also covers |
+|---|---|---|
+| 25 | `…-otp25.ez` | RabbitMQ 3.12 |
+| 26 | `…-otp26.ez` | RabbitMQ 3.12 / 3.13 / 4.0 |
+| 27 | `…-otp27.ez` | RabbitMQ 4.0 |
+
+Check your broker's OTP with `rabbitmqctl status | grep -i erlang`. If none
+matches, build from source against your version (below).
+
 ## Use the prebuilt release (no build needed)
 
-A ready-to-use `.ez` is attached to each [GitHub release](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases). It is built for **RabbitMQ 3.12.14 / Erlang 26** — match your broker's Erlang major version.
+A ready-to-use `.ez` is attached to each [GitHub release](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases). It is built per OTP line (see Compatibility above). Match your broker's OTP major version.
 
 ```sh
 # 1. drop the plugin into the broker's plugins directory
-cp rabbitmq_auth_backend_aoptoken-0.1.0.ez "$RABBITMQ_HOME/plugins/"
+cp rabbitmq_auth_backend_aoptoken-0.1.0-otp26.ez "$RABBITMQ_HOME/plugins/"
 
 # 2. enable it
 rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken
