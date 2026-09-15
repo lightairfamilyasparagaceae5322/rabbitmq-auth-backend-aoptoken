@@ -39,6 +39,15 @@
 %%      {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
 %%      {leeway_seconds, 0}                  %% clock skew allowance for exp/nbf
 %%   ]}
+%%
+%% Every authentication decision is reported at debug level, naming the
+%% algorithm, the account the client connected as and the token's subject, so
+%% a chain can be traced without a packet capture. Turn it on with
+%%
+%%   log.file.level = debug
+%%
+%% Tokens and keys are never written to the log, at any level: a presented
+%% token is reported only by its size.
 -module(rabbit_auth_backend_aoptoken).
 
 -include_lib("rabbit_common/include/rabbit.hrl").
@@ -48,20 +57,31 @@
 -export([user_login_authentication/2]).
 
 -define(APP, rabbitmq_auth_backend_aoptoken).
+-define(UNKNOWN_ALG, <<"(unknown)">>).
 
 %%----------------------------------------------------------------------------
 %% Authentication
 %%----------------------------------------------------------------------------
 
-user_login_authentication(_Username, AuthProps) ->
+user_login_authentication(Username, AuthProps) ->
     case password(AuthProps) of
         {ok, <<"token:", Jwt/binary>>} ->
+            rabbit_log:debug(
+              "~ts: '~ts' presented a bearer token (~b bytes)",
+              [?APP, Username, byte_size(Jwt)]),
             case check_token(Jwt) of
-                {ok, Subject} ->
+                {ok, Subject, Alg} ->
                     %% The token's subject is the identity; the authorization
                     %% backend resolves its permissions.
+                    rabbit_log:debug(
+                      "~ts: accepted a ~ts token presented as '~ts';"
+                      " authenticating as its subject '~ts'",
+                      [?APP, Alg, Username, Subject]),
                     {ok, #auth_user{username = Subject, tags = [], impl = none}};
-                {refused, Reason} ->
+                {refused, Reason, Alg} ->
+                    rabbit_log:debug(
+                      "~ts: refused a ~ts token presented as '~ts': ~ts",
+                      [?APP, Alg, Username, Reason]),
                     {refused, Reason, []};
                 {misconfigured, Reason} ->
                     rabbit_log:warning(
@@ -70,8 +90,14 @@ user_login_authentication(_Username, AuthProps) ->
             end;
         {ok, _NotAToken} ->
             %% Leave it to the next backend in the chain (typically internal).
+            rabbit_log:debug(
+              "~ts: '~ts' presented a password rather than a bearer token,"
+              " leaving it to the rest of the chain",
+              [?APP, Username]),
             {refused, "not a bearer token", []};
         error ->
+            rabbit_log:debug(
+              "~ts: no credentials presented for '~ts'", [?APP, Username]),
             {refused, "no credentials provided", []}
     end.
 
@@ -96,29 +122,61 @@ to_binary(_)                   -> <<>>.
 %% Token verification
 %%----------------------------------------------------------------------------
 
-%% {ok, Subject} | {refused, Reason} | {misconfigured, Reason}
+%% {ok, Subject, Alg} | {refused, Reason, Alg} | {misconfigured, Reason}
+%%
+%% Alg is the algorithm named in the token header, reported purely so the
+%% caller can say which one was involved when logging the outcome.
 check_token(Jwt) ->
     try
         case binary:split(Jwt, <<".">>, [global]) of
             [HeaderSeg, PayloadSeg, SigSeg] ->
                 Header = decode_json(HeaderSeg),
                 Payload = decode_json(PayloadSeg),
+                Alg = alg_name(Header),
                 Signed = <<HeaderSeg/binary, ".", PayloadSeg/binary>>,
                 Signature = base64url_decode(SigSeg),
                 case verify_signature(Header, Signed, Signature) of
-                    true  -> check_claims(Payload);
-                    false -> {refused, "invalid token signature"};
-                    {unsupported, Alg} ->
+                    true  -> with_alg(check_claims(Payload), Alg);
+                    false -> {refused, "invalid token signature", Alg};
+                    {unsupported, _Raw} ->
+                        %% Report the sanitized name, not the raw header value.
                         {refused, "unsupported token algorithm " ++
-                             binary_to_list(Alg)}
+                             binary_to_list(Alg), Alg}
                 end;
             _ ->
-                {refused, "malformed token"}
+                {refused, "malformed token", ?UNKNOWN_ALG}
         end
     catch
         throw:{?APP, misconfigured, Reason} -> {misconfigured, Reason};
-        _:_ -> {refused, "malformed token"}
+        _:_ -> {refused, "malformed token", ?UNKNOWN_ALG}
     end.
+
+with_alg({ok, Subject}, Alg)     -> {ok, Subject, Alg};
+with_alg({refused, Reason}, Alg) -> {refused, Reason, Alg}.
+
+%% The header's "alg", reduced to something safe to put in a log line or hand
+%% back to a client. It is read before any signature is checked, so it is
+%% wholly attacker-controlled: cap its length and drop anything that is not a
+%% plain identifier character, so a crafted token cannot flood the log or
+%% forge a line break in it.
+alg_name(Header) ->
+    case maps:get(<<"alg">>, Header, undefined) of
+        Alg when is_binary(Alg), Alg =/= <<>> ->
+            case << <<C>> || <<C>> <= binary:part(Alg, 0, min(byte_size(Alg), 16)),
+                             is_identifier_char(C) >> of
+                <<>>      -> ?UNKNOWN_ALG;
+                Sanitized -> Sanitized
+            end;
+        _ ->
+            ?UNKNOWN_ALG
+    end.
+
+is_identifier_char(C) when C >= $a, C =< $z -> true;
+is_identifier_char(C) when C >= $A, C =< $Z -> true;
+is_identifier_char(C) when C >= $0, C =< $9 -> true;
+is_identifier_char($-)                      -> true;
+is_identifier_char($_)                      -> true;
+is_identifier_char(_)                       -> false.
 
 verify_signature(Header, Signed, Signature) ->
     case algorithm(Header) of

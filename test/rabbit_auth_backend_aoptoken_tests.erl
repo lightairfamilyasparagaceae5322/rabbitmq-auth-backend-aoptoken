@@ -58,6 +58,9 @@ all_test_() ->
         , {"a tampered signature is refused", fun tampered_signature/0}
         , {"alg none is refused",          fun alg_none/0}
         , {"an unsupported alg is refused", fun unsupported_alg/0}
+        , {"a hostile alg cannot flood or forge the log", fun hostile_alg_is_bounded/0}
+        , {"an unprintable alg falls back to a placeholder", fun unprintable_alg_falls_back/0}
+        , {"a malformed token reports no algorithm", fun malformed_reports_no_algorithm/0}
         , {"a public key cannot be used as an HMAC secret", fun alg_confusion/0}
         , {"an expired token is refused",  fun expired/0}
         , {"leeway tolerates a just-expired token", fun expiry_leeway/0}
@@ -132,6 +135,33 @@ alg_none() ->
 unsupported_alg() ->
     use_secret(),
     ?assertMatch(refused, auth(hs_token(sha256, <<"PS256">>, #{<<"sub">> => ?USER}))).
+
+%% "alg" is read from the header before any signature has been checked, so it
+%% is wholly attacker-controlled, and it reaches both the log and the refusal
+%% handed back to the client. A crafted one must not be able to flood either
+%% or forge a line break in the log.
+hostile_alg_is_bounded() ->
+    use_secret(),
+    Hostile = <<"HS256 forged log line ", (binary:copy(<<"A">>, 4096))/binary>>,
+    Reason = refusal_reason(hs_token(sha256, Hostile, #{<<"sub">> => ?USER})),
+    %% still recognised as an algorithm problem, not degraded to "malformed"
+    ?assertMatch("unsupported token algorithm" ++ _, Reason),
+    ?assert(length(Reason) < 64),
+    ?assertEqual(nomatch, binary:match(list_to_binary(Reason), <<"\n">>)).
+
+%% An "alg" with nothing identifier-like left in it degrades to a placeholder
+%% rather than an empty or raw value.
+unprintable_alg_falls_back() ->
+    use_secret(),
+    ?assertEqual("unsupported token algorithm (unknown)",
+                 refusal_reason(hs_token(sha256, <<"!@#$%^&*()">>,
+                                         #{<<"sub">> => ?USER}))).
+
+%% A malformed token reports a placeholder algorithm instead of crashing on
+%% one that was never parsed.
+malformed_reports_no_algorithm() ->
+    use_secret(),
+    ?assertEqual("malformed token", refusal_reason(<<"not.a.jwt">>)).
 
 %% The classic JWT attack: sign with the RSA public key as an HMAC secret and
 %% declare HS256. Symmetric and asymmetric keys are configured separately, so
@@ -240,6 +270,14 @@ setup_keys() ->
 auth(Token) -> auth(?USER, Token).
 
 auth(Login, Token) -> call(Login, <<"token:", Token/binary>>).
+
+%% The refusal text as the broker and the client see it, before normalise/1
+%% throws it away.
+refusal_reason(Token) ->
+    {refused, Reason, []} =
+        rabbit_auth_backend_aoptoken:user_login_authentication(
+          ?USER, [{password, <<"token:", Token/binary>>}]),
+    Reason.
 
 call(Login, Password) ->
     normalise(rabbit_auth_backend_aoptoken:user_login_authentication(
