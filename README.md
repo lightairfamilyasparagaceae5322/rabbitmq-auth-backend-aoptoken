@@ -52,7 +52,32 @@ Standard JWT, `alg=HS256`, payload contains at least `{"sub":"<username>"}`.
 The client sends it in the password field prefixed with `token:`, e.g.
 `token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<sig>`.
 
-## Build
+## Use the prebuilt release (no build needed)
+
+A ready-to-use `.ez` is attached to each [GitHub release](https://github.com/martinx/rabbitmq-auth-backend-aoptoken/releases). It is built for **RabbitMQ 3.12.14 / Erlang 26** — match your broker's Erlang major version.
+
+```sh
+# 1. drop the plugin into the broker's plugins directory
+cp rabbitmq_auth_backend_aoptoken-0.1.0.ez "$RABBITMQ_HOME/plugins/"
+
+# 2. enable it
+rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken
+
+# 3. point it at the signing key (advanced.config) and set the chain
+#    (rabbitmq.conf) as shown above, then restart the node
+rabbitmqctl shutdown && rabbitmq-server -detached
+
+# 4. verify — same account, both credentials
+rabbitmqctl authenticate_user <user> '<password>'
+rabbitmqctl authenticate_user <user> 'token:<jwt>'
+```
+
+`rabbitmq-plugins list` should show `[E*] rabbitmq_auth_backend_aoptoken`.
+
+> The `.ez` bundles compiled BEAM for one Erlang major version. If your broker
+> runs a different Erlang, build from source (below) against that version.
+
+## Build from source
 
 This is a standard RabbitMQ plugin and must be built against the target broker
 version's toolchain (see the RabbitMQ plugin development guide). It has been
@@ -84,4 +109,4 @@ erlc -I <rmq>/plugins/rabbit_common-3.12.14/include \
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

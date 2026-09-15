@@ -21,7 +21,7 @@
 -behaviour(rabbit_authn_backend).
 -export([user_login_authentication/2]).
 
-user_login_authentication(Username, AuthProps) ->
+user_login_authentication(_Username, AuthProps) ->
     case get_password(AuthProps) of
         {ok, Pwd} ->
             case strip_token(Pwd) of

@@ -3,6 +3,8 @@
     {vsn, "0.1.0"},
     {modules, []},
     {registered, []},
-    {applications, [kernel, stdlib, crypto, rabbit_common]},
-    {env, [{key_file, "/etc/rabbitmq/token.key"}]}
+    {applications, [kernel, stdlib, crypto, rabbit_common, rabbit]},
+    {optional_applications, []},
+    {env, [{key_file, "/etc/rabbitmq/token.key"}]},
+    {broker_version_requirements, []}
 ]}.
