@@ -9,16 +9,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        otp: ['25', '26', '27']   # one .ez per OTP; BEAM loads on the build OTP and up to +2
+        include:            # one .ez per OTP; BEAM loads on the build OTP and up to +2
+          - {otp: '25', rabbit_common: '3.12.14'}
+          - {otp: '26', rabbit_common: '3.13.7'}
+          - {otp: '27', rabbit_common: '4.1.1'}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: '3'
-      - name: Build .ez
-        run: ./build-ez.sh
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - run: sed -i 's/{rabbit_common, "[^"]*"}/{rabbit_common, "${{ matrix.rabbit_common }}"}/' rebar.config
+      - run: ./build-ez.sh
+      - uses: softprops/action-gh-release@v2
         with:
           files: _build/*.ez
