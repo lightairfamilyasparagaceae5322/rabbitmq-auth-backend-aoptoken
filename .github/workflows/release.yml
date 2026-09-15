@@ -6,13 +6,11 @@ permissions:
   contents: write
 jobs:
   build:
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - {otp: '25', runner: 'ubuntu-22.04'}   # covers OTP 25/26/27
-          - {otp: '26', runner: 'ubuntu-latest'}  # exact match for ADMQ (RabbitMQ 3.12.14 on OTP 26)
-          - {otp: '27', runner: 'ubuntu-latest'}  # covers OTP 27/28/29
-    runs-on: ${{ matrix.runner }}
+        otp: ['26', '27']   # BEAM loads on the build OTP and up to +2 -> covers OTP 26-29
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1

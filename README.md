@@ -76,11 +76,12 @@ ships one `.ez` per OTP line — pick the one at or below your broker's OTP:
 
 | your broker's OTP | use the asset |
 |---|---|
-| 25 | `…-otp25.ez` |
 | 26 | `…-otp26.ez` |
 | 27, 28 or 29 | `…-otp27.ez` (a newer runtime loads an older-built artifact) |
 
-These cover OTP 25–29, i.e. RabbitMQ 3.11 through the latest 4.x. Check your
+The prebuilt assets cover **OTP 26–29** (RabbitMQ 3.12 on OTP 26 through the
+latest 4.x). For OTP 25 (older 3.11/3.12 deployments), build from source
+(below) — the code is verified to compile against RabbitMQ 3.11–4.1. Check your
 broker with `rabbitmqctl status | grep -i erlang`.
 
 Check your broker's OTP with `rabbitmqctl status | grep -i erlang`. If none
