@@ -1,6 +1,6 @@
 # rabbitmq-auth-backend-aoptoken
 
-A RabbitMQ authentication backend that lets clients authenticate with a
+An authentication backend for RabbitMQ that lets clients authenticate with a
 **pre-issued JWT token** (an opaque `token:<jwt>` string placed in the
 AMQP password field), **side by side** with normal username/password users —
 on the **same account**, with **no client changes**.
@@ -55,6 +55,7 @@ auth_aoptoken.key_file = /etc/rabbitmq/token.key
 ## optional
 # auth_aoptoken.audience = my-cluster   ## require a matching "aud" claim
 # auth_aoptoken.leeway_seconds = 0      ## clock skew allowance for exp/nbf
+# auth_aoptoken.accept_bare_jwt = false ## also accept a JWT sent without the token: prefix
 ```
 
 Prefer the `*_file` forms for secrets: `rabbitmq.conf` tends to end up in
@@ -77,7 +78,8 @@ should you prefer Erlang terms or need to template the file:
      %% {public_key_base64, "LS0t..."},
      %% {public_key,        <<"-----BEGIN PUBLIC KEY-----...">>},
      %% {audience,       <<"my-cluster">>},
-     %% {leeway_seconds, 0}
+     %% {leeway_seconds, 0},
+     %% {accept_bare_jwt, false}
   ]}
 ].
 ```
@@ -98,6 +100,7 @@ Both files are read; `advanced.config` wins where they overlap. Note that
 | `public_key` / `public_key_base64` / `public_key_file` | *(none)* | `RS*` / `ES*` tokens are refused and a warning is logged |
 | `audience` | *(none)* | the `aud` claim is not checked |
 | `leeway_seconds` | `0` | `exp` / `nbf` are compared against the clock with no tolerance |
+| `accept_bare_jwt` | `false` | only credentials starting with `token:` are treated as tokens |
 
 Within each key group the first configured form wins, in the order listed
 above. Nothing has a built-in key: the plugin never ships with one, and never
@@ -150,11 +153,41 @@ picked up the key you meant. An inline key is named rather than printed.
 A missing or unreadable key is reported once per authentication at warning
 level, and is the one case worth alerting on.
 
+## Troubleshooting
+
+| symptom | what it means |
+|---|---|
+| A client with a correctly signed token gets `ACCESS_REFUSED`, and the log shows `PLAIN login refused: user '<sub>' - invalid credentials` | The token's `sub` has no user in RabbitMQ. This backend only authenticates; permissions come from `internal`, so every token subject needs a user with vhost permissions. A token-only user needs no usable password: `rabbitmqctl add_user <sub> <anything>` then `rabbitmqctl clear_password <sub>`. |
+| `PLAIN login refused: not a bearer token` | The credential was rejected by `internal` and did not start with `token:` — in practice a wrong password, or a token sent in the username field. The token belongs in the **password** field, prefixed with `token:`; the username may be anything, since the identity is the token's `sub`. |
+| `PLAIN login refused: not a bearer token (it looks like a JWT without the token: prefix)` | The client sent the JWT as the password but without the `token:` prefix. Add the prefix on the client, or enable `accept_bare_jwt` (see [Tokens without the prefix](#tokens-without-the-prefix)). |
+| `PLAIN login refused: invalid token signature` | The node verifies with a different key than the one that signed the token. Compare the `sha256:` fingerprint logged when the key is loaded against `sha256sum` of the intended key file, and across the nodes of a cluster. |
+| With debug logging on, `failed authentication by backend rabbit_auth_backend_internal` appears before this backend's lines | Expected: `internal` is tried first and rejects the token as a password, then the chain reaches this backend. Follow one connection by its process id (`grep -F '<0.x.y>'`) to see how it ended. |
+| No decision lines at all | Decisions are logged at debug level. `rabbitmqctl set_log_level debug` turns it on at runtime without a restart, `set_log_level info` turns it off. A connection only authenticates when it opens, so clients that are already connected produce no new lines until they reconnect. |
+
+The `PLAIN login refused: ...` lines are logged at error level by RabbitMQ
+itself, so they are visible without debug logging.
+
 ## Token format
 
 A standard JWT whose payload carries at least `{"sub":"<username>"}`. The
 client sends it in the password field prefixed with `token:`, e.g.
 `token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<signature>`.
+
+### Tokens without the prefix
+
+Some clients cannot add the `token:` prefix and send the bare JWT as the
+password. Set `auth_aoptoken.accept_bare_jwt = true` to accept those as well.
+It is off by default because it is rarely needed: the prefix is what makes a
+token unambiguous. A credential is taken for a bare JWT only when it has the
+shape of one — three dot-separated segments, the first a JSON header naming an
+`alg` — and its signature and claims are then checked exactly as for a
+prefixed token. An ordinary password is not mistaken for one.
+
+With the setting off, a bare JWT is refused with its own reason,
+`not a bearer token (it looks like a JWT without the token: prefix)`, so such
+clients are easy to spot in the log even without debug logging.
+
+### Signing algorithms
 
 The signing algorithm is read from the JWT header:
 
@@ -174,12 +207,17 @@ which is JWT-based and unchanged in shape across Pulsar 2.x–4.x.
 
 The plugin is **not pinned to a RabbitMQ version**. It imposes no
 `broker_version_requirements`, and its source uses only the
-`rabbit_authn_backend` behaviour and the `#auth_user{}` record — both unchanged
-across RabbitMQ 3.8–4.3. The `3.12.14` seen in `rebar.config` and the build
-notes is only the reference used to fetch headers and to verify against; the
-compiled plugin is expected to load on any 3.11–4.3 broker whose OTP matches
-the artifact (see the table below). Verified end to end on RabbitMQ 3.12.14 /
-OTP 26 against a running broker.
+`rabbit_authn_backend` behaviour, the `#auth_user{}` record and RabbitMQ's log
+domain — all unchanged across RabbitMQ 3.11–4.3 (the behaviour moved from
+`rabbit_common` to `rabbit` in 4.2, with the same callback). The `3.12.14` seen
+in `rebar.config` and the build notes is only the reference used to fetch
+headers and to verify against; the compiled plugin loads on any 3.11–4.3
+broker whose OTP matches the artifact (see the table below).
+
+Verified end to end against running brokers — password login, token login,
+bad signature, unknown subject, token-only user, key fingerprint and debug
+logging — on RabbitMQ 3.12.14 (OTP 25 and 26), 4.0.9 (OTP 26) and 4.3.6
+(OTP 27).
 
 The binary `.ez` is tied to the **Erlang/OTP** it was compiled on. BEAM is
 forward-compatible: code compiled on OTP *N* loads on OTP *N*, *N+1* and *N+2*
@@ -188,16 +226,14 @@ ships one `.ez` per OTP line — pick the one at or below your broker's OTP:
 
 | your broker's OTP | use the asset |
 |---|---|
+| 25 | `…-otp25.ez` |
 | 26 | `…-otp26.ez` |
 | 27, 28 or 29 | `…-otp27.ez` (a newer runtime loads an older-built artifact) |
 
-The prebuilt assets cover **OTP 26–29** (RabbitMQ 3.12 on OTP 26 through the
-latest 4.x). For OTP 25 (older 3.11/3.12 deployments), build from source
-(below) — the code is verified to compile against RabbitMQ 3.11–4.1. Check your
-broker with `rabbitmqctl status | grep -i erlang`.
-
-Check your broker's OTP with `rabbitmqctl status | grep -i erlang`. If none
-matches, build from source against your version (below).
+The prebuilt assets cover **OTP 25–29**, i.e. RabbitMQ 3.11 and 3.12 on OTP 25
+through the latest 4.x. Check your broker's OTP with
+`rabbitmqctl status | grep -i erlang`. If none matches, build from source
+against your version (below).
 
 ## Use the prebuilt release (no build needed)
 
@@ -205,7 +241,7 @@ A ready-to-use `.ez` is attached to each GitHub release — grab the [latest one
 
 ```sh
 # 1. drop the plugin into the broker's plugins directory
-cp rabbitmq_auth_backend_aoptoken-0.2.1-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
+cp rabbitmq_auth_backend_aoptoken-<version>-otp26.ez "$RABBITMQ_HOME/plugins/"   # pick the -otpNN matching your broker
 
 # 2. enable it
 rabbitmq-plugins enable rabbitmq_auth_backend_aoptoken
@@ -226,23 +262,27 @@ rabbitmqctl authenticate_user <user> 'token:<jwt>'
 
 ## Build from source
 
-This is a standard RabbitMQ plugin and must be built against the target broker
-version's toolchain (see the RabbitMQ plugin development guide). It has been
-compiled and tested against **RabbitMQ 3.12.14 / Erlang 26**.
-
-Quick compile for a smoke test (against a broker's shipped `rabbit_common`):
+`./build-ez.sh` produces the `.ez` for the Erlang/OTP it runs on, against the
+`rabbit_common` (and, from 4.2, `rabbit`) shipped with a broker:
 
 ```sh
-erlc -I <rmq>/plugins/rabbit_common-3.12.14/include \
-     -pa <rmq>/plugins/rabbit_common-3.12.14/ebin \
+./build-ez.sh --rmq-release 3.12.14     # or: ./build-ez.sh <rmq>/plugins/rabbit_common-<version>
+```
+
+Quick compile for a smoke test (against a broker's shipped applications):
+
+```sh
+erlc -I <rmq>/plugins/rabbit_common-<version>/include \
+     -pa <rmq>/plugins/rabbit_common-<version>/ebin \
+     -pa <rmq>/plugins/rabbit-<version>/ebin \
      -o ebin src/rabbit_auth_backend_aoptoken.erl
 ```
 
 ## Tests
 
-EUnit covers every supported algorithm, the claim checks and the rejection
+EUnit covers every supported algorithm, the claim checks, the rejection
 paths (tampering, `alg: none`, algorithm confusion, expiry, audience,
-missing configuration). Tokens are minted inside the suite, so the real
+missing configuration) and the optional bare-JWT path. Tokens are minted inside the suite, so the real
 signature paths are exercised.
 
 ```sh
@@ -251,7 +291,8 @@ signature paths are exercised.
 
 CI runs the suite against every supported RabbitMQ line at its latest patch
 release — 3.11, 3.12, 3.13, 4.0, 4.1, 4.2 and 4.3 — each on an OTP that line
-ships with, plus 4.3 on OTP 28 to catch a future runtime breaking the source.
+ships with, plus 3.12 on OTP 25 (the oldest runtime an artifact targets) and
+4.3 on OTP 28 to catch a future runtime breaking the source.
 
 ## Install
 
@@ -268,10 +309,18 @@ ships with, plus 4.3 on OTP 28 to catch a future runtime breaking the source.
 - Symmetric and asymmetric keys are configured separately, so a public key can
   never be used as an HMAC secret (the classic JWT algorithm-confusion attack).
 - HMAC comparison is constant-time.
+- `accept_bare_jwt` changes only which credentials are recognised as tokens;
+  a bare JWT is verified exactly like a prefixed one.
 - `exp` / `nbf` are enforced when present. Tokens without `exp` do not expire —
   rotate keys or tokens according to your own policy.
 - The signing key is read from configuration at runtime and is never embedded
   in the plugin.
+
+## Trademarks
+
+This is an independent community plugin. It is not affiliated with, endorsed
+by or supported by Broadcom Inc. or the RabbitMQ team. RabbitMQ is a trademark
+of Broadcom Inc.
 
 ## License
 

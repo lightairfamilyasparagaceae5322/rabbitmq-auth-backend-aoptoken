@@ -1,6 +1,6 @@
 {application, rabbitmq_auth_backend_aoptoken, [
-    {description, "RabbitMQ auth backend for pre-issued HS256 JWT (token:) credentials"},
-    {vsn, "0.2.2"},
+    {description, "Auth backend for RabbitMQ: pre-issued JWT (token:) credentials, HS/RS/ES"},
+    {vsn, "0.2.3"},
     {modules, []},
     {registered, []},
     {applications, [kernel, stdlib, crypto, rabbit_common, rabbit]},

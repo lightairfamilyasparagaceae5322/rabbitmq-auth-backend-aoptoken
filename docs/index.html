@@ -153,6 +153,7 @@ footer{padding-block:40px 60px; color:var(--ink-3); font-size:13.5px}
 footer .wrap{display:flex; flex-wrap:wrap; gap:12px 24px; align-items:center}
 footer a{color:var(--ink-2)}
 footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
+footer .tm{flex-basis:100%; margin:0; font-size:12.5px}
 
 .toggle{font-family:var(--mono); font-size:12px; color:var(--ink-2); background:none; border:1px solid var(--line-2); border-radius:7px; padding:6px 10px; cursor:pointer}
 .toggle:hover{border-color:var(--accent); color:var(--ink)}
@@ -185,8 +186,8 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
       <a class="btn ghost" href="#how">See how it works</a>
     </div>
     <div class="metabar">
-      <span><b>Verified</b> RabbitMQ 3.11–4.1</span>
-      <span><b>Tests</b> 28 EUnit, in CI</span>
+      <span><b>Verified</b> RabbitMQ 3.11–4.3</span>
+      <span><b>Tests</b> 37 EUnit, in CI</span>
       <span><b>Algorithms</b> HS · RS · ES</span>
       <span><b>OTP</b> 25–29</span>
       <span><b>License</b> MIT</span>
@@ -283,6 +284,7 @@ footer .sp{margin-left:auto; font-family:var(--mono); font-size:12px}
         <tr><td><code>public_key</code> / <code>public_key_base64</code> / <code>public_key_file</code></td><td>none</td><td><code>RS*</code> / <code>ES*</code> tokens refused, warning logged</td></tr>
         <tr><td><code>audience</code></td><td>none</td><td>the <code>aud</code> claim is not checked</td></tr>
         <tr><td><code>leeway_seconds</code></td><td><code>0</code></td><td>no clock-skew tolerance for <code>exp</code>/<code>nbf</code></td></tr>
+        <tr><td><code>accept_bare_jwt</code></td><td><code>false</code></td><td>only <code>token:</code>-prefixed credentials are treated as tokens</td></tr>
       </tbody>
     </table></div>
     <p style="color:var(--ink-2);font-size:14.5px">There is no built-in key and no fallback secret or path. With no key configured the plugin refuses every token and leaves the rest of the chain alone, so <code>internal</code> password authentication keeps working.</p>
@@ -350,7 +352,8 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
   <div class="wrap">
     <span>rabbit_auth_backend_aoptoken · MIT</span>
     <a id="ghfoot" href="#">Source &amp; issues</a>
-    <span class="sp">RabbitMQ 3.11–4.1 · OTP 25–29</span>
+    <span class="sp">RabbitMQ 3.11–4.3 · OTP 25–29</span>
+    <p class="tm">Independent community plugin, not affiliated with, endorsed by or supported by Broadcom Inc. or the RabbitMQ team. RabbitMQ is a trademark of Broadcom Inc.</p>
   </div>
 </footer>
 
