@@ -11,7 +11,7 @@ jobs:
   #
   # Each line is built on an OTP it actually ships with. The last entry pins
   # 4.3 to OTP 28 as well, to catch a future runtime breaking the source before
-  # an OTP 28 artifact is ever needed.
+  # an OTP 28 artifact is ever needed. OTP 25 is covered by test-otp25 below.
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -35,4 +35,20 @@ jobs:
         run: ./run-tests.sh --rmq-release ${{ matrix.rmq }}
       - name: Package .ez
         run: ./build-ez.sh --rmq-release ${{ matrix.rmq }}
+      - run: ls -la _build/*.ez
+
+  # OTP 25 -- the oldest runtime a release artifact targets -- runs in the
+  # official Erlang image: setup-beam does not publish OTP 25 for current
+  # runners. 3.12 is the newest RabbitMQ line that still supports OTP 25.
+  test-otp25:
+    runs-on: ubuntu-latest
+    container: erlang:25
+    name: RabbitMQ 3.12.14 on OTP 25
+    steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils zip
+      - uses: actions/checkout@v4
+      - name: EUnit
+        run: ./run-tests.sh --rmq-release 3.12.14
+      - name: Package .ez
+        run: ./build-ez.sh --rmq-release 3.12.14
       - run: ls -la _build/*.ez
