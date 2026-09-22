@@ -187,10 +187,10 @@ footer .tm{flex-basis:100%; margin:0; font-size:12.5px}
     </div>
     <div class="metabar">
       <span><b>Verified</b> RabbitMQ 3.11–4.3</span>
-      <span><b>Tests</b> 37 EUnit, in CI</span>
+      <span><b>Tests</b> 45 EUnit, in CI</span>
       <span><b>Algorithms</b> HS · RS · ES</span>
       <span><b>OTP</b> 25–29</span>
-      <span><b>License</b> MIT</span>
+      <span><b>License</b> MPL-2.0</span>
     </div>
   </div>
 </section>
@@ -285,6 +285,7 @@ footer .tm{flex-basis:100%; margin:0; font-size:12.5px}
         <tr><td><code>audience</code></td><td>none</td><td>the <code>aud</code> claim is not checked</td></tr>
         <tr><td><code>leeway_seconds</code></td><td><code>0</code></td><td>no clock-skew tolerance for <code>exp</code>/<code>nbf</code></td></tr>
         <tr><td><code>accept_bare_jwt</code></td><td><code>false</code></td><td>only <code>token:</code>-prefixed credentials are treated as tokens</td></tr>
+        <tr><td><code>emit_events</code></td><td><code>true</code></td><td>set to <code>false</code> to stop publishing audit events</td></tr>
       </tbody>
     </table></div>
     <p style="color:var(--ink-2);font-size:14.5px">There is no built-in key and no fallback secret or path. With no key configured the plugin refuses every token and leaves the rest of the chain alone, so <code>internal</code> password authentication keeps working.</p>
@@ -326,6 +327,11 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
         <h3>No secret in the build</h3>
         <p>The signing key is read from a file path at runtime and never embedded in the plugin. Rotate keys and tokens on your own policy.</p>
       </div>
+      <div class="card">
+        <span class="m">access.auth.verified</span>
+        <h3>Audit every token</h3>
+        <p>Each verified token is published as an internal event: who authenticated, from where, prefixed or bare, and when the token expires. Read it through <code>rabbitmq_event_exchange</code>.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -350,7 +356,7 @@ token:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAxIn0.<span class="c">&lt;hs256-sig&gt;
 
 <footer>
   <div class="wrap">
-    <span>rabbit_auth_backend_aoptoken · MIT</span>
+    <span>rabbit_auth_backend_aoptoken · MPL-2.0</span>
     <a id="ghfoot" href="#">Source &amp; issues</a>
     <span class="sp">RabbitMQ 3.11–4.3 · OTP 25–29</span>
     <p class="tm">Independent community plugin, not affiliated with, endorsed by or supported by Broadcom Inc. or the RabbitMQ team. RabbitMQ is a trademark of Broadcom Inc.</p>

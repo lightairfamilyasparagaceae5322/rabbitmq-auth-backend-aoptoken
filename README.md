@@ -56,6 +56,7 @@ auth_aoptoken.key_file = /etc/rabbitmq/token.key
 # auth_aoptoken.audience = my-cluster   ## require a matching "aud" claim
 # auth_aoptoken.leeway_seconds = 0      ## clock skew allowance for exp/nbf
 # auth_aoptoken.accept_bare_jwt = false ## also accept a JWT sent without the token: prefix
+# auth_aoptoken.emit_events = true      ## publish an audit event for each verified token
 ```
 
 Prefer the `*_file` forms for secrets: `rabbitmq.conf` tends to end up in
@@ -79,7 +80,8 @@ should you prefer Erlang terms or need to template the file:
      %% {public_key,        <<"-----BEGIN PUBLIC KEY-----...">>},
      %% {audience,       <<"my-cluster">>},
      %% {leeway_seconds, 0},
-     %% {accept_bare_jwt, false}
+     %% {accept_bare_jwt, false},
+     %% {emit_events, true}
   ]}
 ].
 ```
@@ -101,6 +103,7 @@ Both files are read; `advanced.config` wins where they overlap. Note that
 | `audience` | *(none)* | the `aud` claim is not checked |
 | `leeway_seconds` | `0` | `exp` / `nbf` are compared against the clock with no tolerance |
 | `accept_bare_jwt` | `false` | only credentials starting with `token:` are treated as tokens |
+| `emit_events` | `true` | — (set to `false` to stop publishing [audit events](#audit-events)) |
 
 Within each key group the first configured form wins, in the order listed
 above. Nothing has a built-in key: the plugin never ships with one, and never
@@ -152,6 +155,63 @@ picked up the key you meant. An inline key is named rather than printed.
 
 A missing or unreadable key is reported once per authentication at warning
 level, and is the one case worth alerting on.
+
+## Audit events
+
+Every token this backend verifies is also published as a RabbitMQ internal
+event, `access_auth_verified`. With the event exchange plugin enabled it
+arrives on `amq.rabbitmq.event` with the routing key `access.auth.verified`,
+so a queue or stream bound to `access.#` records who authenticated with a
+token, from where, in which form, and when the token expires:
+
+```sh
+rabbitmq-plugins enable rabbitmq_event_exchange
+```
+
+Each message carries its fields as headers:
+
+| header | value |
+|---|---|
+| `schema_version` | `1` |
+| `stage` | `verified` |
+| `user` | the token's `sub`: the identity RabbitMQ goes on to authorize |
+| `login` | the username the client connected with |
+| `backend` | `rabbit_auth_backend_aoptoken` |
+| `method` | `token` |
+| `credential` | `prefixed`, or `bare` for a token accepted through `accept_bare_jwt` |
+| `alg` | the signing algorithm named in the token header |
+| `pid` | the connection's process |
+| `node` | the node that verified the token |
+| `connection_name` | `peer:port -> host:port`, when RabbitMQ has recorded it |
+| `exp`, `iat`, `nbf` | the token's claims in Unix seconds, when present |
+| `iss`, `kid` | the issuer and key id, printable ASCII up to 128 bytes, when present |
+
+Nothing that could carry the credential is published: no token, no signature
+and no other claims. Headers other than the last three rows are always
+present.
+
+### What "verified" means
+
+The event is published once the token's signature and claims check out.
+RabbitMQ then still authorizes the subject and opens the virtual host, and
+either step can refuse the login. The outcome is told by RabbitMQ's own
+events for the same `pid`:
+
+| after `access.auth.verified` with pid P | the login |
+|---|---|
+| `connection.created` with pid P | succeeded |
+| only `connection.closed` with pid P | failed after the token was verified: the subject has no user, or no access to the virtual host |
+
+RabbitMQ's own `user.authentication.success` is published before the virtual
+host is opened, so it is not proof of a completed login either. A token that
+fails verification publishes no `access` event; RabbitMQ's
+`user.authentication.failure` carries the refusal reason in its `error`
+header, as an array of character codes.
+
+Publishing is asynchronous and never affects authentication. Its cost is not
+measurable unless the event exchange is enabled and something consumes the
+events; then it is one message per token login. Turn it off with
+`auth_aoptoken.emit_events = false`.
 
 ## Troubleshooting
 
@@ -282,7 +342,7 @@ erlc -I <rmq>/plugins/rabbit_common-<version>/include \
 
 EUnit covers every supported algorithm, the claim checks, the rejection
 paths (tampering, `alg: none`, algorithm confusion, expiry, audience,
-missing configuration) and the optional bare-JWT path. Tokens are minted inside the suite, so the real
+missing configuration), the optional bare-JWT path and the audit events. Tokens are minted inside the suite, so the real
 signature paths are exercised.
 
 ```sh
@@ -324,4 +384,9 @@ of Broadcom Inc.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Mozilla Public License 2.0. See [LICENSE](LICENSE).
+
+Releases up to and including 0.2.3 were published under the MIT License and
+remain available under it.
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
