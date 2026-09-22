@@ -37,7 +37,9 @@
 %%      {public_key,        <<"...">>},
 %%
 %%      {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
-%%      {leeway_seconds, 0}                  %% clock skew allowance for exp/nbf
+%%      {leeway_seconds, 0},                 %% clock skew allowance for exp/nbf
+%%      {accept_bare_jwt, false}             %% also accept a JWT sent without
+%%                                           %% the "token:" prefix
 %%   ]}
 %%
 %% Every authentication decision is reported at debug level, naming the
@@ -71,41 +73,77 @@
 user_login_authentication(Username, AuthProps) ->
     case password(AuthProps) of
         {ok, <<"token:", Jwt/binary>>} ->
-            ?LOG_DEBUG(
-              "~ts: '~ts' presented a bearer token (~b bytes)",
-              [?APP, Username, byte_size(Jwt)], ?LOG_META),
-            case check_token(Jwt) of
-                {ok, Subject, Alg} ->
-                    %% The token's subject is the identity; the authorization
-                    %% backend resolves its permissions.
+            authenticate(Username, Jwt, "a bearer token");
+        {ok, Password} ->
+            case looks_like_jwt(Password) of
+                true ->
+                    Accept = config(accept_bare_jwt, false),
+                    bare_jwt(Username, Password, Accept);
+                false ->
+                    %% Leave it to the next backend in the chain (typically
+                    %% internal).
                     ?LOG_DEBUG(
-                      "~ts: accepted a ~ts token presented as '~ts';"
-                      " authenticating as its subject '~ts'",
-                      [?APP, Alg, Username, Subject], ?LOG_META),
-                    {ok, #auth_user{username = Subject, tags = [], impl = none}};
-                {refused, Reason, Alg} ->
-                    ?LOG_DEBUG(
-                      "~ts: refused a ~ts token presented as '~ts': ~ts",
-                      [?APP, Alg, Username, Reason], ?LOG_META),
-                    {refused, Reason, []};
-                {misconfigured, Reason} ->
-                    ?LOG_WARNING(
-                      "~ts: cannot verify tokens: ~tp", [?APP, Reason],
-                      ?LOG_META),
-                    {refused, "token authentication is not configured", []}
+                      "~ts: '~ts' presented a password rather than a bearer"
+                      " token, leaving it to the rest of the chain",
+                      [?APP, Username], ?LOG_META),
+                    {refused, "not a bearer token", []}
             end;
-        {ok, _NotAToken} ->
-            %% Leave it to the next backend in the chain (typically internal).
-            ?LOG_DEBUG(
-              "~ts: '~ts' presented a password rather than a bearer token,"
-              " leaving it to the rest of the chain",
-              [?APP, Username], ?LOG_META),
-            {refused, "not a bearer token", []};
         error ->
             ?LOG_DEBUG(
               "~ts: no credentials presented for '~ts'", [?APP, Username],
               ?LOG_META),
             {refused, "no credentials provided", []}
+    end.
+
+%% A JWT sent without the "token:" prefix. Accepted only when the operator has
+%% opted in; otherwise refused with a reason that tells it apart from a wrong
+%% password, since RabbitMQ logs that reason at error level on its own.
+bare_jwt(Username, Jwt, true) ->
+    authenticate(Username, Jwt, "a bare JWT");
+bare_jwt(Username, _Jwt, _) ->
+    ?LOG_DEBUG(
+      "~ts: '~ts' presented what looks like a JWT without the token: prefix;"
+      " not accepted because accept_bare_jwt is off",
+      [?APP, Username], ?LOG_META),
+    {refused, "not a bearer token (it looks like a JWT without the token:"
+              " prefix)", []}.
+
+authenticate(Username, Jwt, What) ->
+    ?LOG_DEBUG(
+      "~ts: '~ts' presented ~ts (~b bytes)",
+      [?APP, Username, What, byte_size(Jwt)], ?LOG_META),
+    case check_token(Jwt) of
+        {ok, Subject, Alg} ->
+            %% The token's subject is the identity; the authorization backend
+            %% resolves its permissions.
+            ?LOG_DEBUG(
+              "~ts: accepted a ~ts token presented as '~ts';"
+              " authenticating as its subject '~ts'",
+              [?APP, Alg, Username, Subject], ?LOG_META),
+            {ok, #auth_user{username = Subject, tags = [], impl = none}};
+        {refused, Reason, Alg} ->
+            ?LOG_DEBUG(
+              "~ts: refused a ~ts token presented as '~ts': ~ts",
+              [?APP, Alg, Username, Reason], ?LOG_META),
+            {refused, Reason, []};
+        {misconfigured, Reason} ->
+            ?LOG_WARNING(
+              "~ts: cannot verify tokens: ~tp", [?APP, Reason], ?LOG_META),
+            {refused, "token authentication is not configured", []}
+    end.
+
+%% Three non-empty dot-separated segments whose first decodes to a JSON object
+%% naming an "alg": the shape of a JWS compact token. An ordinary password
+%% practically never matches, and nothing here is trusted -- it only decides
+%% which path the credential takes; the signature is checked afterwards.
+looks_like_jwt(Credential) ->
+    case binary:split(Credential, <<".">>, [global]) of
+        [H, P, S] when H =/= <<>>, P =/= <<>>, S =/= <<>> ->
+            try is_binary(maps:get(<<"alg">>, decode_json(H), undefined))
+            catch _:_ -> false
+            end;
+        _ ->
+            false
     end.
 
 password(Props) when is_map(Props) ->

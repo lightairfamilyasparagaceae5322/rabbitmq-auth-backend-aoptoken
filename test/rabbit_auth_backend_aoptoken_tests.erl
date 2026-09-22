@@ -31,7 +31,7 @@ reset() ->
     persistent_term:erase({rabbit_auth_backend_aoptoken, public_key}),
     [application:unset_env(?APP, K)
      || K <- [key, key_base64, key_file, public_key, public_key_base64,
-              public_key_file, audience, leeway_seconds]],
+              public_key_file, audience, leeway_seconds, accept_bare_jwt]],
     ok.
 
 use_secret() ->
@@ -77,6 +77,11 @@ all_test_() ->
         , {"a secret file is accepted",    fun secret_from_file/0}
         , {"changing the key at runtime takes effect", fun key_change_takes_effect/0}
         , {"props may be a map or a list", fun props_shapes/0}
+        , {"a bare JWT is refused by default, with a distinct reason", fun bare_jwt_off/0}
+        , {"a bare JWT is accepted when enabled", fun bare_jwt_on/0}
+        , {"an enabled bare JWT still needs a valid signature", fun bare_jwt_bad_signature/0}
+        , {"an ordinary password is unaffected by accept_bare_jwt", fun bare_jwt_password_unaffected/0}
+        , {"a dotted password without a JWT header is not taken for one", fun bare_jwt_lookalike/0}
         ]
      end}.
 
@@ -276,6 +281,42 @@ props_shapes() ->
     ?assertEqual({ok, ?USER}, normalise(AsList)),
     ?assertEqual({ok, ?USER}, normalise(AsMap)).
 
+%% A JWT sent without the "token:" prefix is refused unless the operator opted
+%% in, and the refusal names that case, so the error line RabbitMQ writes on its
+%% own tells it apart from an ordinary wrong password.
+bare_jwt_off() ->
+    use_secret(),
+    Jwt = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    ?assertEqual(refused, call(?USER, Jwt)),
+    Reason = reason(Jwt),
+    ?assertNotEqual(nomatch, string:find(Reason, "not a bearer token")),
+    ?assertNotEqual(nomatch, string:find(Reason, "looks like a JWT")).
+
+bare_jwt_on() ->
+    use_secret(),
+    application:set_env(?APP, accept_bare_jwt, true),
+    Jwt = hs_token(sha256, <<"HS256">>, #{<<"sub">> => <<"real-identity">>}),
+    ?assertEqual({ok, <<"real-identity">>}, call(<<"any-login">>, Jwt)).
+
+bare_jwt_bad_signature() ->
+    reset(),
+    application:set_env(?APP, key, <<"not-the-right-secret-0123456789ab">>),
+    application:set_env(?APP, accept_bare_jwt, true),
+    Jwt = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    ?assertEqual(refused, call(?USER, Jwt)),
+    ?assertEqual("invalid token signature", reason(Jwt)).
+
+bare_jwt_password_unaffected() ->
+    use_secret(),
+    application:set_env(?APP, accept_bare_jwt, true),
+    ?assertEqual("not a bearer token", reason(<<"correct horse battery staple">>)).
+
+bare_jwt_lookalike() ->
+    use_secret(),
+    application:set_env(?APP, accept_bare_jwt, true),
+    ?assertEqual("not a bearer token", reason(<<"first.second.third">>)),
+    ?assertEqual("not a bearer token", reason(<<"v1.2.3">>)).
+
 %%----------------------------------------------------------------------------
 %% Helpers
 %%----------------------------------------------------------------------------
@@ -293,6 +334,13 @@ refusal_reason(Token) ->
     {refused, Reason, []} =
         rabbit_auth_backend_aoptoken:user_login_authentication(
           ?USER, [{password, <<"token:", Token/binary>>}]),
+    Reason.
+
+%% The refusal text for a raw password, as RabbitMQ logs it.
+reason(Password) ->
+    {refused, Reason, []} =
+        rabbit_auth_backend_aoptoken:user_login_authentication(
+          ?USER, [{password, Password}]),
     Reason.
 
 call(Login, Password) ->
