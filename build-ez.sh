@@ -8,6 +8,10 @@ APP=rabbitmq_auth_backend_aoptoken
 VSN=$(sed -n 's/.*{vsn, *"\([^"]*\)".*/\1/p' src/${APP}.app.src)
 OTP=$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt().')
 RCDIR=$(scripts/rabbit-common.sh "$@")
+# rabbit_authn_backend lives in rabbit_common up to RabbitMQ 4.1 and in rabbit
+# from 4.2; put both on the code path so the compiler can check the behaviour.
+RABBIT_PA=""
+for d in "$(dirname "${RCDIR}")"/rabbit-[0-9]*/ebin; do [ -d "$d" ] && RABBIT_PA="-pa $d"; done
 
 INCROOT="_build/incroot"; rm -rf "${INCROOT}"; mkdir -p "${INCROOT}"
 ln -s "$(cd "${RCDIR}" && pwd)" "${INCROOT}/rabbit_common"
@@ -15,7 +19,7 @@ echo ">> OTP ${OTP}; rabbit_common: ${RCDIR}"
 
 OUT="_build/${APP}-${VSN}"
 rm -rf "${OUT}"; mkdir -p "${OUT}/ebin"
-erlc -I "${INCROOT}" -pa "${RCDIR}/ebin" -o "${OUT}/ebin" src/rabbit_auth_backend_aoptoken.erl
+erlc -I "${INCROOT}" -pa "${RCDIR}/ebin" ${RABBIT_PA} -o "${OUT}/ebin" src/rabbit_auth_backend_aoptoken.erl
 sed 's/{modules, \[\]}/{modules, [rabbit_auth_backend_aoptoken]}/' \
     src/${APP}.app.src > "${OUT}/ebin/${APP}.app"
 # The cuttlefish schema has to travel inside the archive: the broker collects
