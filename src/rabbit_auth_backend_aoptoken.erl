@@ -51,6 +51,8 @@
 -module(rabbit_auth_backend_aoptoken).
 
 -include_lib("rabbit_common/include/rabbit.hrl").
+-include_lib("rabbit_common/include/logging.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -behaviour(rabbit_authn_backend).
 
@@ -58,6 +60,9 @@
 
 -define(APP, rabbitmq_auth_backend_aoptoken).
 -define(UNKNOWN_ALG, <<"(unknown)">>).
+%% Log through Erlang's logger under RabbitMQ's global log domain: the routing
+%% the rabbit_log module applied, which RabbitMQ deprecated in 4.1.
+-define(LOG_META, #{domain => ?RMQLOG_DOMAIN_GLOBAL}).
 
 %%----------------------------------------------------------------------------
 %% Authentication
@@ -66,38 +71,40 @@
 user_login_authentication(Username, AuthProps) ->
     case password(AuthProps) of
         {ok, <<"token:", Jwt/binary>>} ->
-            rabbit_log:debug(
+            ?LOG_DEBUG(
               "~ts: '~ts' presented a bearer token (~b bytes)",
-              [?APP, Username, byte_size(Jwt)]),
+              [?APP, Username, byte_size(Jwt)], ?LOG_META),
             case check_token(Jwt) of
                 {ok, Subject, Alg} ->
                     %% The token's subject is the identity; the authorization
                     %% backend resolves its permissions.
-                    rabbit_log:debug(
+                    ?LOG_DEBUG(
                       "~ts: accepted a ~ts token presented as '~ts';"
                       " authenticating as its subject '~ts'",
-                      [?APP, Alg, Username, Subject]),
+                      [?APP, Alg, Username, Subject], ?LOG_META),
                     {ok, #auth_user{username = Subject, tags = [], impl = none}};
                 {refused, Reason, Alg} ->
-                    rabbit_log:debug(
+                    ?LOG_DEBUG(
                       "~ts: refused a ~ts token presented as '~ts': ~ts",
-                      [?APP, Alg, Username, Reason]),
+                      [?APP, Alg, Username, Reason], ?LOG_META),
                     {refused, Reason, []};
                 {misconfigured, Reason} ->
-                    rabbit_log:warning(
-                      "~ts: cannot verify tokens: ~tp", [?APP, Reason]),
+                    ?LOG_WARNING(
+                      "~ts: cannot verify tokens: ~tp", [?APP, Reason],
+                      ?LOG_META),
                     {refused, "token authentication is not configured", []}
             end;
         {ok, _NotAToken} ->
             %% Leave it to the next backend in the chain (typically internal).
-            rabbit_log:debug(
+            ?LOG_DEBUG(
               "~ts: '~ts' presented a password rather than a bearer token,"
               " leaving it to the rest of the chain",
-              [?APP, Username]),
+              [?APP, Username], ?LOG_META),
             {refused, "not a bearer token", []};
         error ->
-            rabbit_log:debug(
-              "~ts: no credentials presented for '~ts'", [?APP, Username]),
+            ?LOG_DEBUG(
+              "~ts: no credentials presented for '~ts'", [?APP, Username],
+              ?LOG_META),
             {refused, "no credentials provided", []}
     end.
 
@@ -325,9 +332,9 @@ resolve(CacheName, Sources, Transform, MissingReason) ->
 %% its SHA-256, which identifies the key without disclosing it — compare it
 %% against `sha256sum` of the intended file, or across the nodes of a cluster.
 report_key(CacheName, {Kind, Value}, Bytes) ->
-    rabbit_log:info("~ts: loaded ~ts from ~ts (~b bytes, sha256:~ts)",
-                    [?APP, key_label(CacheName), source_label(Kind, Value),
-                     byte_size(Bytes), fingerprint(Bytes)]).
+    ?LOG_INFO("~ts: loaded ~ts from ~ts (~b bytes, sha256:~ts)",
+              [?APP, key_label(CacheName), source_label(Kind, Value),
+               byte_size(Bytes), fingerprint(Bytes)], ?LOG_META).
 
 key_label(symmetric_key) -> "symmetric key";
 key_label(public_key)    -> "public key".
