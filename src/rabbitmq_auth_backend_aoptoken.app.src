@@ -1,10 +1,10 @@
 {application, rabbitmq_auth_backend_aoptoken, [
     {description, "Auth backend for RabbitMQ: pre-issued JWT (token:) credentials, HS/RS/ES"},
-    {vsn, "0.2.3"},
+    {vsn, "0.3.0"},
     {modules, []},
     {registered, []},
     {applications, [kernel, stdlib, crypto, rabbit_common, rabbit]},
     {optional_applications, []},
-    {env, [{leeway_seconds, 0}, {accept_bare_jwt, false}]},
+    {env, [{leeway_seconds, 0}, {accept_bare_jwt, false}, {emit_events, true}]},
     {broker_version_requirements, []}
 ]}.

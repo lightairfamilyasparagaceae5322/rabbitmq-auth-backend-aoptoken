@@ -45,8 +45,9 @@
 %%
 %%      {audience,       <<"my-cluster">>},  %% require a matching "aud" claim
 %%      {leeway_seconds, 0},                 %% clock skew allowance for exp/nbf
-%%      {accept_bare_jwt, false}             %% also accept a JWT sent without
+%%      {accept_bare_jwt, false},            %% also accept a JWT sent without
 %%                                           %% the "token:" prefix
+%%      {emit_events, true}                  %% publish access.auth.verified
 %%   ]}
 %%
 %% Every authentication decision is reported at debug level, naming the
@@ -72,6 +73,8 @@
 %% Log through Erlang's logger under RabbitMQ's global log domain: the routing
 %% the rabbit_log module applied, which RabbitMQ deprecated in 4.1.
 -define(LOG_META, #{domain => ?RMQLOG_DOMAIN_GLOBAL}).
+%% Longest issuer / key id reported in an audit event.
+-define(MAX_CLAIM_BYTES, 128).
 
 %%----------------------------------------------------------------------------
 %% Authentication
@@ -80,7 +83,7 @@
 user_login_authentication(Username, AuthProps) ->
     case password(AuthProps) of
         {ok, <<"token:", Jwt/binary>>} ->
-            authenticate(Username, Jwt, "a bearer token");
+            authenticate(Username, Jwt, prefixed);
         {ok, Password} ->
             case looks_like_jwt(Password) of
                 true ->
@@ -106,7 +109,7 @@ user_login_authentication(Username, AuthProps) ->
 %% opted in; otherwise refused with a reason that tells it apart from a wrong
 %% password, since RabbitMQ logs that reason at error level on its own.
 bare_jwt(Username, Jwt, true) ->
-    authenticate(Username, Jwt, "a bare JWT");
+    authenticate(Username, Jwt, bare);
 bare_jwt(Username, _Jwt, _) ->
     ?LOG_DEBUG(
       "~ts: '~ts' presented what looks like a JWT without the token: prefix;"
@@ -115,18 +118,19 @@ bare_jwt(Username, _Jwt, _) ->
     {refused, "not a bearer token (it looks like a JWT without the token:"
               " prefix)", []}.
 
-authenticate(Username, Jwt, What) ->
+authenticate(Username, Jwt, Credential) ->
     ?LOG_DEBUG(
       "~ts: '~ts' presented ~ts (~b bytes)",
-      [?APP, Username, What, byte_size(Jwt)], ?LOG_META),
+      [?APP, Username, describe(Credential), byte_size(Jwt)], ?LOG_META),
     case check_token(Jwt) of
-        {ok, Subject, Alg} ->
+        {ok, Subject, Alg, Claims} ->
             %% The token's subject is the identity; the authorization backend
             %% resolves its permissions.
             ?LOG_DEBUG(
               "~ts: accepted a ~ts token presented as '~ts';"
               " authenticating as its subject '~ts'",
               [?APP, Alg, Username, Subject], ?LOG_META),
+            emit_verified(Username, Subject, Alg, Credential, Claims),
             {ok, #auth_user{username = Subject, tags = [], impl = none}};
         {refused, Reason, Alg} ->
             ?LOG_DEBUG(
@@ -138,6 +142,75 @@ authenticate(Username, Jwt, What) ->
               "~ts: cannot verify tokens: ~tp", [?APP, Reason], ?LOG_META),
             {refused, "token authentication is not configured", []}
     end.
+
+describe(prefixed) -> "a bearer token";
+describe(bare)     -> "a bare JWT".
+
+%%----------------------------------------------------------------------------
+%% Audit events
+%%----------------------------------------------------------------------------
+
+%% One event for every token this backend verifies, published by
+%% rabbitmq_event_exchange with the routing key access.auth.verified.
+%%
+%% It marks the verification stage only. RabbitMQ still authorizes the
+%% subject and opens the virtual host afterwards, and either can refuse the
+%% login; whether it completed is told by RabbitMQ's own connection.created
+%% for the same pid. rabbit_event:notify/2 is asynchronous, and nothing here
+%% is allowed to affect the authentication result.
+emit_verified(Login, Subject, Alg, Credential, Claims) ->
+    case config(emit_events, true) of
+        false ->
+            ok;
+        _ ->
+            Props = [{schema_version, 1},
+                     {stage, verified},
+                     {user, Subject},
+                     {login, to_binary(Login)},
+                     {backend, ?MODULE},
+                     {method, token},
+                     {credential, Credential},
+                     {alg, Alg},
+                     {pid, self()},
+                     {node, node()}]
+                    ++ connection_name() ++ Claims,
+            try rabbit_event:notify(access_auth_verified, Props)
+            catch _:_ -> ok
+            end
+    end.
+
+%% The "peer:port -> host:port" name RabbitMQ's connection process records for
+%% itself before it authenticates. Best effort: omitted when it is not there.
+connection_name() ->
+    case get(process_name) of
+        {_, Name} when is_binary(Name) -> [{connection_name, Name}];
+        _                              -> []
+    end.
+
+%% Claims worth reporting, taken only from a token whose signature verified:
+%% the NumericDate claims as integers, the issuer and key id as short
+%% printable strings. A claim the token does not carry is omitted.
+token_claims(Header, Payload) ->
+    Claim = fun(Map, Key) -> maps:get(Key, Map, undefined) end,
+    [{K, V} || {K, V} <- [{exp, numeric(Claim(Payload, <<"exp">>))},
+                          {iat, numeric(Claim(Payload, <<"iat">>))},
+                          {nbf, numeric(Claim(Payload, <<"nbf">>))},
+                          {iss, printable(Claim(Payload, <<"iss">>))},
+                          {kid, printable(Claim(Header, <<"kid">>))}],
+              V =/= undefined].
+
+numeric(N) when is_integer(N) -> N;
+numeric(N) when is_float(N)   -> trunc(N);
+numeric(_)                    -> undefined.
+
+printable(B) when is_binary(B) ->
+    Cap = binary:part(B, 0, min(byte_size(B), ?MAX_CLAIM_BYTES)),
+    case << <<C>> || <<C>> <= Cap, C >= 16#21, C =< 16#7e >> of
+        <<>>      -> undefined;
+        Sanitized -> Sanitized
+    end;
+printable(_) ->
+    undefined.
 
 %% Three non-empty dot-separated segments whose first decodes to a JSON object
 %% naming an "alg": the shape of a JWS compact token. An ordinary password
@@ -174,7 +247,7 @@ to_binary(_)                   -> <<>>.
 %% Token verification
 %%----------------------------------------------------------------------------
 
-%% {ok, Subject, Alg} | {refused, Reason, Alg} | {misconfigured, Reason}
+%% {ok, Subject, Alg, Claims} | {refused, Reason, Alg} | {misconfigured, Reason}
 %%
 %% Alg is the algorithm named in the token header, reported purely so the
 %% caller can say which one was involved when logging the outcome.
@@ -188,7 +261,8 @@ check_token(Jwt) ->
                 Signed = <<HeaderSeg/binary, ".", PayloadSeg/binary>>,
                 Signature = base64url_decode(SigSeg),
                 case verify_signature(Header, Signed, Signature) of
-                    true  -> with_alg(check_claims(Payload), Alg);
+                    true  -> with_alg(check_claims(Payload), Alg,
+                                      token_claims(Header, Payload));
                     false -> {refused, "invalid token signature", Alg};
                     {unsupported, _Raw} ->
                         %% Report the sanitized name, not the raw header value.
@@ -203,8 +277,8 @@ check_token(Jwt) ->
         _:_ -> {refused, "malformed token", ?UNKNOWN_ALG}
     end.
 
-with_alg({ok, Subject}, Alg)     -> {ok, Subject, Alg};
-with_alg({refused, Reason}, Alg) -> {refused, Reason, Alg}.
+with_alg({ok, Subject}, Alg, Claims) -> {ok, Subject, Alg, Claims};
+with_alg({refused, Reason}, Alg, _)  -> {refused, Reason, Alg}.
 
 %% The header's "alg", reduced to something safe to put in a log line or hand
 %% back to a client. It is read before any signature is checked, so it is

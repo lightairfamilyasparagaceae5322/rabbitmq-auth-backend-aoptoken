@@ -19,6 +19,11 @@
 -define(SECRET, <<"a-32-byte-test-secret-0123456789">>).
 -define(USER, <<"app1">>).
 
+%% gen_event callbacks: the suite registers itself as a handler on a stand-in
+%% rabbit_event manager to capture the audit events the backend publishes.
+-export([init/1, handle_event/2, handle_call/2, handle_info/2,
+         terminate/2, code_change/3]).
+
 %%----------------------------------------------------------------------------
 %% Fixture
 %%----------------------------------------------------------------------------
@@ -38,7 +43,8 @@ reset() ->
     persistent_term:erase({rabbit_auth_backend_aoptoken, public_key}),
     [application:unset_env(?APP, K)
      || K <- [key, key_base64, key_file, public_key, public_key_base64,
-              public_key_file, audience, leeway_seconds, accept_bare_jwt]],
+              public_key_file, audience, leeway_seconds, accept_bare_jwt,
+              emit_events]],
     ok.
 
 use_secret() ->
@@ -89,6 +95,14 @@ all_test_() ->
         , {"an enabled bare JWT still needs a valid signature", fun bare_jwt_bad_signature/0}
         , {"an ordinary password is unaffected by accept_bare_jwt", fun bare_jwt_password_unaffected/0}
         , {"a dotted password without a JWT header is not taken for one", fun bare_jwt_lookalike/0}
+        , {"a verified token emits one complete audit event", fun event_prefixed/0}
+        , {"a verified bare JWT is reported as such", fun event_bare/0}
+        , {"token claims are reported when the token carries them", fun event_claims/0}
+        , {"issuer and key id are sanitized and capped", fun event_claims_sanitized/0}
+        , {"the connection name is reported when recorded", fun event_connection_name/0}
+        , {"refusals and passwords emit no event", fun event_none_on_refusal/0}
+        , {"emit_events = false emits nothing", fun event_disabled/0}
+        , {"authentication is unaffected without an event manager", fun event_no_manager/0}
         ]
      end}.
 
@@ -324,9 +338,149 @@ bare_jwt_lookalike() ->
     ?assertEqual("not a bearer token", reason(<<"first.second.third">>)),
     ?assertEqual("not a bearer token", reason(<<"v1.2.3">>)).
 
+%% Every field of the event, with its type. Nothing that could carry the
+%% credential is present, and no value contains any part of the token.
+event_prefixed() ->
+    use_secret(),
+    Token = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    [P] = with_sink(fun() ->
+              ?assertEqual({ok, ?USER},
+                           call(<<"typed-login">>, <<"token:", Token/binary>>))
+          end),
+    ?assertEqual(1, prop(schema_version, P)),
+    ?assertEqual(verified, prop(stage, P)),
+    ?assertEqual(?USER, prop(user, P)),
+    ?assertEqual(<<"typed-login">>, prop(login, P)),
+    ?assertEqual(rabbit_auth_backend_aoptoken, prop(backend, P)),
+    ?assertEqual(token, prop(method, P)),
+    ?assertEqual(prefixed, prop(credential, P)),
+    ?assertEqual(<<"HS256">>, prop(alg, P)),
+    ?assertEqual(self(), prop(pid, P)),
+    ?assertEqual(node(), prop(node, P)),
+    [?assertEqual(undefined, prop(K, P))
+     || K <- [connection_name, exp, iat, nbf, iss, kid, token, password]],
+    [_H, _Pl, Sig] = binary:split(Token, <<".">>, [global]),
+    [?assertEqual(nomatch, binary:match(V, [Token, Sig]))
+     || {_, V} <- P, is_binary(V)].
+
+event_bare() ->
+    use_secret(),
+    application:set_env(?APP, accept_bare_jwt, true),
+    Token = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    [P] = with_sink(fun() -> {ok, ?USER} = call(<<"x">>, Token) end),
+    ?assertEqual(bare, prop(credential, P)).
+
+event_claims() ->
+    use_secret(),
+    Now = os:system_time(second),
+    Token = hs_token_with(#{<<"kid">> => <<"key-2026">>},
+                          #{<<"sub">> => ?USER, <<"exp">> => Now + 600,
+                            <<"iat">> => Now - 5, <<"nbf">> => Now - 5.7,
+                            <<"iss">> => <<"https://issuer.example/">>}),
+    [P] = with_sink(fun() -> {ok, ?USER} = auth(Token) end),
+    ?assertEqual(Now + 600, prop(exp, P)),
+    ?assertEqual(Now - 5, prop(iat, P)),
+    ?assertEqual(trunc(Now - 5.7), prop(nbf, P)),
+    ?assertEqual(<<"https://issuer.example/">>, prop(iss, P)),
+    ?assertEqual(<<"key-2026">>, prop(kid, P)).
+
+event_claims_sanitized() ->
+    use_secret(),
+    Long = binary:copy(<<"i">>, 300),
+    Token = hs_token_with(#{<<"kid">> => <<"key\n1 x">>},
+                          #{<<"sub">> => ?USER,
+                            <<"iss">> => <<"bad\r\nissuer ", Long/binary>>}),
+    [P] = with_sink(fun() -> {ok, ?USER} = auth(Token) end),
+    ?assertEqual(<<"key1x">>, prop(kid, P)),
+    Iss = prop(iss, P),
+    ?assert(byte_size(Iss) =< 128),
+    ?assertEqual(<<"badissuer">>, binary:part(Iss, 0, 9)),
+    ?assertEqual([], [C || <<C>> <= Iss, C < 16#21 orelse C > 16#7e]).
+
+event_connection_name() ->
+    use_secret(),
+    Name = <<"10.0.0.1:50000 -> 10.0.0.2:5672">>,
+    put(process_name, {rabbit_reader, Name}),
+    try
+        [P] = with_sink(fun() ->
+                  {ok, ?USER} = auth(hs_token(sha256, <<"HS256">>,
+                                              #{<<"sub">> => ?USER}))
+              end),
+        ?assertEqual(Name, prop(connection_name, P))
+    after
+        erase(process_name)
+    end.
+
+event_none_on_refusal() ->
+    use_secret(),
+    Now = os:system_time(second),
+    Expired = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER,
+                                               <<"exp">> => Now - 60}),
+    Good = hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}),
+    [Hd, Pl, _] = binary:split(Good, <<".">>, [global]),
+    Tampered = <<Hd/binary, ".", Pl/binary, ".AAAA">>,
+    ?assertEqual([], with_sink(fun() ->
+        refused = auth(Expired),
+        refused = auth(Tampered),
+        refused = call(?USER, <<"a password">>),
+        refused = call(?USER, Good)            %% bare JWT while it is off
+    end)).
+
+event_disabled() ->
+    use_secret(),
+    application:set_env(?APP, emit_events, false),
+    ?assertEqual([], with_sink(fun() ->
+        {ok, ?USER} = auth(hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}))
+    end)).
+
+%% With no rabbit_event manager to publish to, the event is dropped and the
+%% login succeeds exactly as it would with one.
+event_no_manager() ->
+    use_secret(),
+    ?assertEqual(undefined, whereis(rabbit_event)),
+    ?assertEqual({ok, ?USER},
+                 auth(hs_token(sha256, <<"HS256">>, #{<<"sub">> => ?USER}))).
+
 %%----------------------------------------------------------------------------
 %% Helpers
 %%----------------------------------------------------------------------------
+
+%% Run Fun with a stand-in rabbit_event manager, and return the props of the
+%% access_auth_verified events it published, in order.
+with_sink(Fun) ->
+    {ok, Mgr} = gen_event:start({local, rabbit_event}),
+    ok = gen_event:add_handler(Mgr, ?MODULE, self()),
+    try
+        Fun(),
+        _ = gen_event:which_handlers(Mgr),   %% flush pending notifications
+        collect([])
+    after
+        gen_event:stop(Mgr)
+    end.
+
+collect(Acc) ->
+    receive
+        {sink, {event, access_auth_verified, Props, _, _}} -> collect([Props | Acc]);
+        {sink, _Other}                                   -> collect(Acc)
+    after 0 ->
+        lists:reverse(Acc)
+    end.
+
+prop(Key, Props) -> proplists:get_value(Key, Props).
+
+init(Pid)                      -> {ok, Pid}.
+handle_event(Event, Pid)       -> Pid ! {sink, Event}, {ok, Pid}.
+handle_call(_, Pid)            -> {ok, ok, Pid}.
+handle_info(_, Pid)            -> {ok, Pid}.
+terminate(_, _)                -> ok.
+code_change(_, Pid, _)         -> {ok, Pid}.
+
+hs_token_with(HeaderExtra, Claims) ->
+    Header = segment(maps:merge(#{<<"alg">> => <<"HS256">>,
+                                  <<"typ">> => <<"JWT">>}, HeaderExtra)),
+    Signed = <<Header/binary, ".", (segment(Claims))/binary>>,
+    Sig = base64url(crypto:mac(hmac, sha256, ?SECRET, Signed)),
+    <<Signed/binary, ".", Sig/binary>>.
 
 setup_keys() ->
     #{rsa => public_key:generate_key({rsa, 2048, 65537})}.

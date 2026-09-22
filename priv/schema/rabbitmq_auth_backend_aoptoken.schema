@@ -16,6 +16,7 @@
 %%   auth_aoptoken.audience        = my-cluster
 %%   auth_aoptoken.leeway_seconds  = 30
 %%   auth_aoptoken.accept_bare_jwt = false
+%%   auth_aoptoken.emit_events     = true
 %%
 %% Every mapping targets the same application environment advanced.config
 %% writes, so both remain valid and existing setups keep working.
@@ -66,5 +67,12 @@
 %% is the token. Off by default: enable it only for clients that cannot add the
 %% prefix. The signature and claims are checked exactly as for prefixed tokens.
 {mapping, "auth_aoptoken.accept_bare_jwt", "rabbitmq_auth_backend_aoptoken.accept_bare_jwt", [
+    {datatype, {enum, [true, false]}}
+]}.
+
+%% Publish an access_auth_verified event for every token this backend
+%% verifies; rabbitmq_event_exchange exposes it as access.auth.verified.
+%% On by default. Authentication results are the same either way.
+{mapping, "auth_aoptoken.emit_events", "rabbitmq_auth_backend_aoptoken.emit_events", [
     {datatype, {enum, [true, false]}}
 ]}.
