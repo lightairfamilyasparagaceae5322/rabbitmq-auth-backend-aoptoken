@@ -1,4 +1,11 @@
 #!/bin/bash
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2026 martinx
+# SPDX-License-Identifier: MPL-2.0
+#
 # Build an installable .ez plugin package.
 #   ./build-ez.sh <rabbit_common dir>
 #   ./build-ez.sh --rmq-release <version>
